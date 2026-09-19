@@ -1,6 +1,8 @@
 # MDN Ludo Clone
 
-Lokales Browser-Spiel nach dem Prinzip von „Mensch ärgere dich nicht“: React und Vite im Frontend, Colyseus und Express als Spielserver, gemeinsame TypeScript-Regeln. Spielen gegen Bots oder mit Freunden per Raumcode. Keine Cloud-Datenbank, kein Account und keine API-Schlüssel nötig.
+[![Tests und Build](https://github.com/weltraumcowboy67/MDN-Ludo-Clone/actions/workflows/ci.yml/badge.svg)](https://github.com/weltraumcowboy67/MDN-Ludo-Clone/actions/workflows/ci.yml) [![MIT-Lizenz](https://img.shields.io/badge/Lizenz-MIT-315e49)](licence) [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522.12-315e49)](package.json)
+
+Lokales Browser-Spiel nach dem Prinzip von „Mensch ärgere dich nicht“: React und Vite im Frontend, Colyseus und Express als Spielserver, gemeinsame TypeScript-Regeln. Spielen gegen Bots oder mit Freunden per Einladungslink. Kein Spielerkonto und keine Cloud-Datenbank nötig. Optionaler Adminzugang nur auf dem eigenen Rechner.
 
 ## Schnellstart
 
@@ -32,7 +34,7 @@ Dieser eine Befehl:
 3. Startet den Spielserver und wartet auf dessen Healthcheck.
 4. Erstellt einen temporären öffentlichen HTTPS-Link wie `https://….trycloudflare.com`. Frontend und WebSocket-Verbindung laufen beide über diesen Link.
 
-Öffne den ausgegebenen Link, erstelle eine **Multiplayer**-Partie und teile **Link plus Raumcode**. Alle klicken auf „Bereit“, dann startet der Host. Raumcodes unterscheiden Groß- und Kleinschreibung. Strg+C beendet Server und Tunnel gemeinsam. Mitspieler brauchen nur ihren Browser.
+Öffne den ausgegebenen Link, erstelle eine **Multiplayer**-Partie und klicke **Einladen** und teile den kopierten Link. Der Link füllt den Raumcode automatisch aus. Alle klicken auf „Bereit“, dann startet der Host. Raumcodes unterscheiden Groß- und Kleinschreibung. Strg+C beendet Server und Tunnel gemeinsam. Mitspieler brauchen nur ihren Browser.
 
 Auf macOS bzw. anderen Architekturen zuerst [cloudflared installieren](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/), danach funktioniert derselbe Share-Befehl.
 
@@ -50,12 +52,27 @@ Eine `.env` ist optional. Kopiere bei Bedarf `.env.example` nach `.env` und änd
 
 `npm run dev` startet beide Entwicklungsdienste. **Port 5173 im Browser öffnen**: Vite leitet Spielverbindungen an den konfigurierten Server-Port weiter. Beim normalen Start und Teilen braucht man nur den Spielserver-Port.
 
+## Lokale Verwaltung
+
+```bash
+npm run admin:setup
+npm start
+```
+
+Der Einrichtungsdialog fragt Benutzername und Passwort ab und speichert nur einen gesalzenen Passwort-Hash in der ignorierten `.env`. Zum Ändern erneut ausführen und den Server neu starten. Ohne Konfiguration bleibt die Anmeldung gesperrt. Keine Zugangsdaten sind im Repository enthalten.
+
+Öffne **http://127.0.0.1:2567/login** direkt auf dem Server-PC. Anmeldung über öffentliche Tunnel, fremde Hosts oder weitergeleitete Anfragen ist gesperrt, auch wenn cloudflared selbst über localhost verbindet. Der normale Spielzugang bleibt öffentlich erreichbar. Eine Sitzung läuft nach acht Stunden ab und endet beim Serverneustart.
+
+Die Verwaltung kann Meldungen annehmen oder ablehnen, zusätzliche Filterbegriffe entfernen, Spieler entfernen sowie Partien pausieren, fortsetzen oder in die Lobby zurücksetzen. Erst eine Freigabe nimmt einen gemeldeten Begriff in den globalen Filter auf. Bei aktivem Filter werden bereits vorhandene Chattexte ebenfalls gefiltert; Entfernen eines Begriffs stellt zuvor zensierten Text nicht wieder her. Nach Anmeldung einem Spiel beitreten oder die bestehende Spielseite neu laden: Dann erscheint dort das Adminmenü. Abmelden entzieht auch bestehenden Spielverbindungen die Rechte.
+
+Für Freunde den Einladungslink **von der öffentlichen Tunnel-Adresse** kopieren. Ein über localhost kopierter Link ist nur auf deinem PC nutzbar. Wenn sich der Quick-Tunnel-Link ändert, ist auch der Browser-Ursprung neu: gespeicherte Zugänge der alten Tunnel-Adresse werden nicht automatisch übertragen. Eine feste Domain wird hier absichtlich nicht eingerichtet.
+
 ## Fehlerbehebung
 
 - **Port belegt:** anderen Server mit Strg+C beenden oder `PORT` in `.env` ändern. `share` bricht bewusst ab, bevor ein bereits laufender fremder Dienst öffentlich geteilt wird.
 - **Nur JSON statt Spiel:** `npm run build` ausführen und den Server neu starten, oder `npm run play` nutzen.
 - **Server nicht erreichbar:** Terminal prüfen, `/health` öffnen, abgelaufenen Tunnel durch den neu ausgegebenen Link ersetzen. Bei `dev` müssen beide Prozesse laufen.
-- **Raum nicht gefunden:** Codes exakt kopieren. Nach einem Serverneustart sind alte Räume weg. Ohne verbundene Menschen bleibt ein Raum 60 Sekunden für den Wiederbeitritt erhalten und wird danach gelöscht.
+- **Raum nicht gefunden:** Codes exakt kopieren. Leere, noch nicht gestartete Lobbys verschwinden nach 60 Sekunden. Begonnene Partien werden gespeichert und nach Neustart pausiert wiederhergestellt. Für deinen alten Platz brauchst du denselben Browser und Ursprung.
 - **Tunnel startet nicht:** Internet/DNS und Firewall prüfen. Die heruntergeladene Datei liegt nur in `.tools/`. Eine explizite leere Tunnel-Konfiguration verhindert Konflikte mit vorhandenen benannten Cloudflare-Tunneln.
 - **Kein Ton:** Audio-Dateien sind absichtlich nicht enthalten. Fehlende Quellen werden nicht abgespielt. Optional eigene, passend lizenzierte Dateien in `client/src/assets.ts` einbinden.
 
@@ -69,11 +86,14 @@ npm audit
 ```
 
 - `client/src/App.tsx`: Spielauswahl, Lobby, Spielsteuerung, Chat, Einstellungen und Verbindung.
-- `client/src/Board.tsx`, `client/src/styles.css`: Brett, Figuren und responsive Darstellung.
+- `client/src/Board.tsx`, `client/src/styles.css`, `client/src/design.css`: Brett, Figuren und responsive Darstellung.
 - `client/src/assets.ts`: lokale Bild- und optionale Audioquellen.
 - `client/vite.config.ts`: Entwicklungsserver und WebSocket-Proxy.
 - `server/src/index.ts`: HTTP, Healthcheck und statisches Frontend.
 - `server/src/rooms/MenschRoom.ts`: autoritative Spielaktionen, Bots, Timer, Sessions und Moderation.
+- `server/src/adminAuth.ts`, `adminRoutes.ts`, `moderation.ts`: lokaler Zugang, Rechte und Report-Freigabe.
+- `server/src/persistence.ts`, `storage.ts`: atomare Speicherung und Wiederherstellung, optional `DATA_DIR`.
+- `client/src/AdminPage.tsx`, `Modal.tsx`, `ConfirmDialog.tsx`: Verwaltung und Dialoge.
 - `server/src/schema.ts`, `shared/src`: synchronisierter Zustand und Spiellogik.
 - `scripts/share.mjs`: Cloudflare-Download, Prüfung, Start und gemeinsames Beenden.
 - `tests/rooms.test.ts`: Integrationstests mit echtem Server und mehreren WebSocket-Clients.
@@ -81,12 +101,12 @@ npm audit
 
 ## Grenzen und Daten
 
-- Spielstände und Chats liegen im Server-Arbeitsspeicher. Serverneustarts löschen sie. Gemeldete Filterbegriffe werden separat unter `.data/` gespeichert.
+- Begonnene und beendete Partien einschließlich Chat und privater Wiederbeitritts-Schlüssel werden nach jeder Änderung atomar unter `.data/games/` gespeichert. Offene Lobbys sind flüchtig. Reports und freigegebene Begriffe liegen ebenfalls in `.data/`. Keine dieser Dateien ins Git aufnehmen.
+- Nach Neustart oder dem Weggang des letzten Menschen bleibt die Partie pausiert, bis Host oder lokaler Admin fortsetzt. Nach einem Reset wird die gespeicherte Partie entfernt. Alte Partien laufen nicht automatisch ab; zum Aufräumen bei gestopptem Server gezielt die entsprechende JSON-Datei in `.data/games/` löschen.
 - Browser speichern Einstellungen und Wiederbeitritts-Schlüssel lokal. Der Wiederbeitritt funktioniert über „Letzten Raum wieder betreten“ mit demselben Browser und derselben Adresse. Hostrechte gehen beim Verlassen an einen verbundenen Mitspieler.
 - Classic/Singleplayer sind in der Oberfläche freigeschaltet. Der Party-Modus hat bereits Server- und Brettcode für acht Farben, bleibt in der Modusauswahl aber wie bisher deaktiviert.
 - Frühere Appwrite-Räume werden nicht migriert. Der unbenutzte Appwrite-Transport samt fest eingetragener Cloud-Projektkennung wurde zugunsten des vorhandenen lokalen Servers entfernt.
-- Debug-Adminfunktionen sind standardmäßig aus. Nur für lokale Tests kann `ENABLE_DEBUG_ADMIN=1` gesetzt werden; ausschließlich der Raumhost kann dann über `ADMIN!` im Chat Teststeuerungen öffnen. **`npm run share` deaktiviert diese Funktionen immer.**
-- Kein dauerhaft betriebener öffentlicher Spielservice: Accounts, globale Missbrauchsbegrenzung und persistente Partien sind nicht implementiert.
+- Adminrechte entstehen ausschließlich durch eine lokale Anmeldung, nicht durch einen Chatcode oder eine Debug-Umgebungsvariable. Kein öffentlicher Accountservice und kein dauerhaftes Hosting.
 - Keine Tracker, externen Fonts oder CDNs im Spiel. Beim Setup werden npm-Pakete geladen, beim Teilen kommuniziert cloudflared mit GitHub/Cloudflare.
 
 ## Lizenz und Arbeit am Code
