@@ -67,7 +67,7 @@ try {
   const binary = await cloudflared();
   if (!stopping) {
     const server = launch(process.execPath, ['--import', 'tsx', 'server/src/index.ts'], {
-      env: { ...process.env, PORT: String(port), ENABLE_DEBUG_ADMIN: '0' },
+      env: { ...process.env, PORT: String(port) },
     });
     let healthy = false;
     for (let attempt = 0; attempt < 100 && !stopping; attempt++) {

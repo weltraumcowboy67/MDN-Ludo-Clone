@@ -1,3 +1,5 @@
+import { restoreGames } from "./persistence";
+import { adminRoutes } from "./adminRoutes";
 import cors from "cors";
 import express from "express";
 import { createServer } from "node:http";
@@ -15,7 +17,9 @@ const app = express();
 
 // Browser clients use the same origin, including through a Quick Tunnel.
 app.use(cors({ origin: false }));
-app.use(express.json());
+app.use(express.json({ limit: "16kb" }));
+app.use("/api/admin", adminRoutes);
+app.use("/api", (_req,res) => res.status(404).json({error:"Endpunkt nicht gefunden."}));
 app.get("/health", (_request, response) => {
   response.json({
     ok: true,
@@ -61,6 +65,7 @@ gameServer.define("mensch", MenschRoom);
 
 try {
   await gameServer.listen(port, "127.0.0.1");
+  await restoreGames();
   console.log(`Spiel: http://127.0.0.1:${port} | Healthcheck: http://127.0.0.1:${port}/health`);
 } catch (error) {
   console.error((error as NodeJS.ErrnoException).code === "EADDRINUSE"

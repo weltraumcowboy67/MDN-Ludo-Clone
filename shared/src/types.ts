@@ -1,6 +1,6 @@
 export type PlayerColor = "red" | "pink" | "violet" | "blue" | "teal" | "green" | "yellow" | "orange";
 
-export type GameStatus = "lobby" | "playing" | "finished";
+export type GameStatus = "lobby" | "playing" | "paused" | "finished";
 export type GameMode = "singleplayer" | "multiplayer" | "party";
 
 export const BASE_POSITION = -1;

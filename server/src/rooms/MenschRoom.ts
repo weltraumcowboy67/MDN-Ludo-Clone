@@ -1,8 +1,9 @@
+import { saveGame, takeRestore } from "../persistence";
+import { socketAdminSession, validAdminSession } from "../adminAuth";
+import { activeRooms } from "../roomRegistry";
+import { approvedTerms, submitReport } from "../moderation";
 import { randomInt, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import type { Client } from "@colyseus/core";
+import type { AuthContext, Client } from "@colyseus/core";
 import { Room } from "@colyseus/core";
 import { filterChatText, isReportTermInText, normalizeReportedFilterTerm } from "../../../shared/src/chatFilter";
 import {
@@ -31,6 +32,7 @@ import type { ChatMessage, GameMode, GameStateSnapshot, PlayerColor, PlayerState
 import { MenschState, schemaToSnapshot, snapshotToSchema } from "../schema";
 
 interface JoinOptions {
+  restoreKey?: string;
   name?: string;
   color?: PlayerColor;
   customColor?: string;
@@ -75,8 +77,7 @@ const HUMAN_AUTO_STEP_DELAY_MS = 520;
 const ADMIN_CHAT_TRIGGER = "ADMIN!";
 const ADMIN_CENSORED_MESSAGE = "***";
 const RESERVED_PLAYER_NAMES = ["admin", "administrator", "moderator", "mod", "system", "server", "owner"];
-const CHAT_FILTER_DATA_FILE = join(process.cwd(), ".data", "reported-chat-filter-terms.json");
-const GLOBAL_REPORTED_FILTER_TERMS = loadReportedFilterTerms();
+const GLOBAL_REPORTED_FILTER_TERMS = approvedTerms;
 const GLOBAL_BANNED_IPS = new Set<string>();
 
 export class MenschRoom extends Room<{ state: MenschState }> {
@@ -92,10 +93,18 @@ export class MenschRoom extends Room<{ state: MenschState }> {
   private readonly forcedDiceByPlayerId = new Map<string, number>();
   private automationTimeout: { clear: () => void } | null = null;
   private autoPlayPlayerId = "";
+  private shuttingDown = false;
   private emptyRoomTimeout: { clear: () => void } | null = null;
 
+  onAuth(_client: Client, _options: JoinOptions, context: AuthContext) {
+    return { adminSession: socketAdminSession(context) };
+  }
+
   onCreate(options: JoinOptions): void {
-    const gameMode = normalizeGameMode(options.gameMode);
+    const restored = takeRestore(options.restoreKey);
+    if (restored) this.roomId = restored.snapshot.roomId;
+    activeRooms.set(this.roomId, this);
+    const gameMode = restored?.snapshot.gameMode || normalizeGameMode(options.gameMode);
     this.maxClients = gameMode === "singleplayer" ? 1 : getMaxPlayersForMode(gameMode);
     // Keep seats briefly when the last browser reloads or loses its connection.
     this.autoDispose = false;
@@ -103,8 +112,24 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     this.setState(new MenschState());
     const initialSnapshot = createInitialSnapshot(this.roomId, Boolean(options.strikeRequired), gameMode);
     initialSnapshot.settings.turnTimeLimitMs = clampTurnTimeLimit(options.turnTimeLimitMs);
-    snapshotToSchema(initialSnapshot, this.state);
+    if (restored) {
+      const snapshot = restored.snapshot;
+      snapshot.players.forEach(player => { if (!player.isBot) { player.connected = false; player.ready = false; } });
+      if (snapshot.status === "playing") snapshot.status = "paused";
+      snapshot.turnStartedAt = 0; snapshot.turnDeadlineAt = 0;
+      snapshot.lastEvent = "Partie wiederhergestellt. Der Host kann sie fortsetzen.";
+      this.hostId = snapshot.hostId;
+      restored.tokens.forEach(([token,color])=>this.playerTokens.set(token,color));
+      restored.playerTokens.forEach(([id,token])=>this.tokenByPlayerId.set(id,token));
+      this.applySnapshot(snapshot);
+    } else this.applySnapshot(initialSnapshot);
 
+    this.onMessage("resumeGame", (client) => {
+      if (!this.isHost(client, schemaToSnapshot(this.state)) && !validAdminSession(client.auth?.adminSession)) {
+        this.sendError(client, "Nur Host oder Admin können fortsetzen."); return;
+      }
+      try { this.adminAction("resume"); } catch(error) { this.sendError(client, (error as Error).message); }
+    });
     this.onMessage("toggleReady", (client, message: { ready?: boolean }) => {
       this.handleReady(client, Boolean(message?.ready));
     });
@@ -182,7 +207,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     if (reconnectToken && this.reconnectPlayer(client, snapshot, reconnectToken, clientIp)) {
       this.emptyRoomTimeout?.clear();
       snapshot.updatedAt = Date.now();
-      snapshotToSchema(snapshot, this.state);
+      this.applySnapshot(snapshot);
       this.sendSessionInfo(client, reconnectToken);
       this.scheduleTurnAutomation();
       return;
@@ -255,11 +280,12 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     snapshot.lastEvent = `${resolvedPlayerName} ist beigetreten.`;
     addSystemMessage(snapshot, `${resolvedPlayerName} ist dem Spiel beigetreten.`);
     snapshot.updatedAt = Date.now();
-    snapshotToSchema(snapshot, this.state);
+    this.applySnapshot(snapshot);
     this.sendSessionInfo(client, playerToken);
   }
 
   onLeave(client: Client): void {
+    if (this.shuttingDown) return;
     if (this.clients.length === 0) this.scheduleEmptyRoomDisposal();
     if (this.kickedPlayerIds.delete(client.sessionId)) {
       return;
@@ -281,7 +307,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
       snapshot.lastEvent = `${player.name} ist disconnected.`;
       addSystemMessage(snapshot, `${player.name} ist disconnected.`);
       const active = getActivePlayer(snapshot);
-      if (active?.id === client.sessionId && snapshot.status === "playing") {
+      if (active?.id === client.sessionId && snapshot.status === "playing" && snapshot.players.some(p=>p.connected && !p.isBot)) {
         snapshot = advanceToNextPlayer(snapshot);
         this.startTurnWindow(snapshot);
         const nextPlayer = getActivePlayer(snapshot);
@@ -290,15 +316,21 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     }
 
     this.transferHost(snapshot);
+    if (!snapshot.players.some(p => p.connected && !p.isBot) && snapshot.status === "playing") {
+      snapshot.status = "paused";
+      this.clearTurnWindow(snapshot);
+    }
     snapshot.updatedAt = Date.now();
-    snapshotToSchema(snapshot, this.state);
+    this.applySnapshot(snapshot);
     this.scheduleTurnAutomation();
   }
 
   private scheduleEmptyRoomDisposal(): void {
     this.emptyRoomTimeout?.clear();
     this.emptyRoomTimeout = this.clock.setTimeout(() => {
-      if (this.clients.length === 0) void this.disconnect();
+      if (this.clients.length !== 0) return;
+      if (this.state.status === "lobby") void this.disconnect();
+      else if (this.state.status === "playing") this.adminAction("pause");
     }, 60_000);
   }
 
@@ -311,9 +343,67 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     }
   }
 
+  onBeforeShutdown(): void {
+    this.shuttingDown = true;
+    const snapshot = schemaToSnapshot(this.state);
+    if(snapshot.status === "playing") snapshot.status = "paused";
+    snapshot.players.forEach(p=>{if(!p.isBot)p.connected=false;});
+    this.clearTurnWindow(snapshot);
+    this.applySnapshot(snapshot);
+    void this.disconnect();
+  }
+
   onDispose(): void {
+    activeRooms.delete(this.roomId);
     this.emptyRoomTimeout?.clear();
     this.clearAutomationTimeout();
+  }
+
+  private applySnapshot(snapshot: GameStateSnapshot): void {
+    snapshotToSchema(snapshot, this.state);
+    try {
+      saveGame({ version: 1, snapshot, tokens: [...this.playerTokens], playerTokens: [...this.tokenByPlayerId] });
+    } catch (error) {
+      console.error("Spielstand konnte nicht gespeichert werden.", error);
+      this.broadcast("errorMessage", { message: "Speichern fehlgeschlagen. Die Partie kann nach einem Neustart verloren gehen." });
+    }
+  }
+
+  adminOverview() {
+    return { roomId: this.roomId, status: this.state.status, players: schemaToSnapshot(this.state).players.map(({id,name,isBot,connected})=>({id,name,isBot,connected})) };
+  }
+
+  refreshFilter(): void {
+    const snapshot = schemaToSnapshot(this.state);
+    this.applyActiveChatFilter(snapshot);
+    this.applySnapshot(snapshot);
+  }
+
+  adminAction(action: string, playerId = ""): void {
+    let snapshot = schemaToSnapshot(this.state);
+    if (action === "kick") {
+      const player = snapshot.players.find(p=>p.id===playerId);
+      if (!player) throw new Error("Spieler nicht gefunden.");
+      this.removePlayerForModeration(snapshot, player, `${player.name} wurde vom Admin entfernt.`);
+    } else if (action === "pause" && snapshot.status === "playing") {
+      snapshot.status = "paused";
+      this.clearTurnWindow(snapshot);
+    } else if (action === "resume" && snapshot.status === "paused") {
+      if (!snapshot.players.some(p=>p.connected && !p.isBot)) throw new Error("Zuerst muss ein Spieler wieder beitreten.");
+      snapshot.status = "playing";
+      if (!getActivePlayer(snapshot)?.connected && !getActivePlayer(snapshot)?.isBot) snapshot = advanceToNextPlayer(snapshot);
+      this.startTurnWindow(snapshot);
+    } else if (action === "reset") {
+      snapshot = resetForRematch(snapshot);
+      this.clearTurnWindow(snapshot);
+    } else throw new Error("Aktion in diesem Spielzustand nicht möglich.");
+    if (snapshot.status === "playing" && !snapshot.players.some(p => p.connected && !p.isBot)) {
+      snapshot.status = "paused"; this.clearTurnWindow(snapshot);
+    }
+    snapshot.updatedAt = Date.now();
+    snapshot.lastEvent = "Die Spielverwaltung hat die Partie aktualisiert.";
+    this.applySnapshot(snapshot);
+    this.scheduleTurnAutomation();
   }
 
   private handleReady(client: Client, ready: boolean): void {
@@ -333,7 +423,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     snapshot.lastEvent = `${player.name} ist ${ready ? "bereit" : "nicht bereit"}.`;
     snapshot.updatedAt = Date.now();
 
-    snapshotToSchema(snapshot, this.state);
+    this.applySnapshot(snapshot);
   }
 
   private handleStrikeRequired(client: Client, enabled: boolean): void {
@@ -352,7 +442,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     snapshot.lastEvent = `Schlagzwang ist ${enabled ? "aktiv" : "inaktiv"}.`;
     addSystemMessage(snapshot, snapshot.lastEvent);
     snapshot.updatedAt = Date.now();
-    snapshotToSchema(snapshot, this.state);
+    this.applySnapshot(snapshot);
   }
 
   private handleChatFilter(client: Client, enabled: boolean): void {
@@ -371,7 +461,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     snapshot.lastEvent = `Chat-Filter ist ${enabled ? "aktiv" : "inaktiv"}.`;
     addSystemMessage(snapshot, snapshot.lastEvent);
     snapshot.updatedAt = Date.now();
-    snapshotToSchema(snapshot, this.state);
+    this.applySnapshot(snapshot);
   }
 
   private handleTurnTimeLimit(client: Client, rawTurnTimeLimitMs: unknown): void {
@@ -391,7 +481,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     snapshot.lastEvent = `Zugzeit auf ${Math.round(turnTimeLimitMs / 1000)} Sekunden gesetzt.`;
     addSystemMessage(snapshot, snapshot.lastEvent);
     snapshot.updatedAt = Date.now();
-    snapshotToSchema(snapshot, this.state);
+    this.applySnapshot(snapshot);
   }
 
   private handleCustomColor(client: Client, rawCustomColor: string): void {
@@ -411,7 +501,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     player.ready = false;
     snapshot.lastEvent = `${player.name} hat die Spielerfarbe angepasst.`;
     snapshot.updatedAt = Date.now();
-    snapshotToSchema(snapshot, this.state);
+    this.applySnapshot(snapshot);
   }
 
   private handlePlayerColor(client: Client, requestedColor: unknown): void {
@@ -461,7 +551,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     snapshot.currentPlayerIndex = 0;
     snapshot.lastEvent = `${player.name} spielt jetzt mit ${COLOR_META[requestedColor].label}.`;
     snapshot.updatedAt = Date.now();
-    snapshotToSchema(snapshot, this.state);
+    this.applySnapshot(snapshot);
   }
 
   private handleStartGame(client: Client): void {
@@ -509,7 +599,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     }
 
     this.removePlayerFromLobby(snapshot, target, `${target.name} wurde vom Host entfernt.`);
-    snapshotToSchema(snapshot, this.state);
+    this.applySnapshot(snapshot);
   }
 
   private handleRoll(client: Client): void {
@@ -552,19 +642,19 @@ export class MenschRoom extends Room<{ state: MenschState }> {
       this.sendError(client, "Bitte langsamer schreiben. Das ist deine Chat-Verwarnung.");
       addSystemMessage(snapshot, `${player.name} wurde wegen Chat-Spam verwarnt.`);
       snapshot.updatedAt = Date.now();
-      snapshotToSchema(snapshot, this.state);
+      this.applySnapshot(snapshot);
       return;
     }
 
     if (spamResult === "kick") {
       this.sendError(client, "Du wurdest wegen Chat-Spam aus dem Raum entfernt.");
       this.removePlayerForModeration(snapshot, player, `${player.name} wurde wegen Chat-Spam entfernt.`);
-      snapshotToSchema(snapshot, this.state);
+      this.applySnapshot(snapshot);
       this.scheduleTurnAutomation();
       return;
     }
 
-    if (isAdminTrigger(text) && process.env.ENABLE_DEBUG_ADMIN === "1" && this.isHost(client, snapshot)) {
+    if (isAdminTrigger(text) && validAdminSession(client.auth?.adminSession)) {
       this.adminPlayerIds.add(player.id);
       snapshot.chat.push({
         id: createId("chat"),
@@ -575,7 +665,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
       });
       trimChat(snapshot);
       snapshot.updatedAt = Date.now();
-      snapshotToSchema(snapshot, this.state);
+      this.applySnapshot(snapshot);
       client.send("adminUnlocked", { message: "Admin-Menü freigeschaltet." });
       return;
     }
@@ -589,7 +679,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     });
     trimChat(snapshot);
     snapshot.updatedAt = Date.now();
-    snapshotToSchema(snapshot, this.state);
+    this.applySnapshot(snapshot);
   }
 
   private handleChatReport(client: Client, message: ChatReportPayload): void {
@@ -623,21 +713,10 @@ export class MenschRoom extends Room<{ state: MenschState }> {
       return;
     }
 
-    const wasKnown = this.reportedFilterTerms.has(normalizedTerm);
-    this.reportedFilterTerms.add(normalizedTerm);
-    if (!wasKnown) {
-      void persistReportedFilterTerms(this.reportedFilterTerms);
-    }
-    this.applyActiveChatFilter(snapshot);
-    snapshot.lastEvent = wasKnown
-      ? "Der gemeldete Begriff war bereits im Chat-Filter."
-      : "Ein gemeldeter Begriff wurde zur Filterliste hinzugefügt.";
-    addSystemMessage(snapshot, snapshot.lastEvent);
-    snapshot.updatedAt = Date.now();
-    snapshotToSchema(snapshot, this.state);
-    client.send("reportAccepted", {
-      message: wasKnown ? "Report geprüft. Der Begriff war schon im Filter." : "Report angenommen. Der Begriff wird jetzt gefiltert.",
-    });
+    try {
+      submitReport(this.roomId, messageId, targetMessage.text, normalizedTerm);
+      client.send("reportAccepted", { message: "Meldung eingereicht. Ein Admin prüft sie vor der Freigabe." });
+    } catch (error) { this.sendError(client, (error as Error).message); }
   }
 
   private handleRematch(client: Client): void {
@@ -657,7 +736,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     this.clearTurnWindow(rematch);
     this.applyActiveChatFilter(rematch);
     addSystemMessage(rematch, `${player.name} hat eine Revanche gestartet.`);
-    snapshotToSchema(rematch, this.state);
+    this.applySnapshot(rematch);
   }
 
   private handleAddBot(client: Client): void {
@@ -682,7 +761,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     addSystemMessage(snapshot, snapshot.lastEvent);
     snapshot.updatedAt = Date.now();
 
-    snapshotToSchema(snapshot, this.state);
+    this.applySnapshot(snapshot);
   }
 
   private handleAdminDiceBias(client: Client, rawMode: unknown, targetPlayerId: string): void {
@@ -739,7 +818,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     snapshot.lastEvent = `${skippedPlayerName} wurde vom Admin übersprungen. ${getActivePlayer(snapshot)?.name || "Niemand"} ist dran.`;
     addSystemMessage(snapshot, snapshot.lastEvent);
     snapshot.updatedAt = Date.now();
-    snapshotToSchema(snapshot, this.state);
+    this.applySnapshot(snapshot);
     this.scheduleTurnAutomation();
     client.send("adminActionAccepted", { message: "Zug übersprungen." });
   }
@@ -766,7 +845,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     snapshot.lastEvent = `${targetPlayer.name} ist durch den Admin am Zug.`;
     addSystemMessage(snapshot, snapshot.lastEvent);
     snapshot.updatedAt = Date.now();
-    snapshotToSchema(snapshot, this.state);
+    this.applySnapshot(snapshot);
     this.scheduleTurnAutomation();
     client.send("adminActionAccepted", { message: `${targetPlayer.name} ist jetzt am Zug.` });
   }
@@ -793,7 +872,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     snapshot.lastEvent = `${targetPlayer.name} wurde vom Admin zurückgesetzt.`;
     addSystemMessage(snapshot, snapshot.lastEvent);
     snapshot.updatedAt = Date.now();
-    snapshotToSchema(snapshot, this.state);
+    this.applySnapshot(snapshot);
     this.scheduleTurnAutomation();
     client.send("adminActionAccepted", { message: `${targetPlayer.name} zurückgesetzt.` });
   }
@@ -817,7 +896,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     }
 
     this.removePlayerForModeration(snapshot, target, `${target.name} wurde vom Admin entfernt.`);
-    snapshotToSchema(snapshot, this.state);
+    this.applySnapshot(snapshot);
     this.scheduleTurnAutomation();
     client.send("adminActionAccepted", { message: `${target.name} entfernt.` });
   }
@@ -853,7 +932,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
 
     GLOBAL_BANNED_IPS.add(targetIp);
     this.removePlayerForModeration(snapshot, target, `${target.name} wurde vom Admin gesperrt.`);
-    snapshotToSchema(snapshot, this.state);
+    this.applySnapshot(snapshot);
     this.scheduleTurnAutomation();
     client.send("adminActionAccepted", { message: `${target.name} gesperrt.` });
   }
@@ -878,7 +957,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     addSystemMessage(snapshot, "Das Spiel startet.");
     this.startTurnWindow(snapshot);
     snapshot.updatedAt = Date.now();
-    snapshotToSchema(snapshot, this.state);
+    this.applySnapshot(snapshot);
     this.scheduleTurnAutomation();
   }
 
@@ -923,7 +1002,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
 
     this.keepOrStartTurnWindow(snapshot, activePlayer.id);
     snapshot.updatedAt = Date.now();
-    snapshotToSchema(snapshot, this.state);
+    this.applySnapshot(snapshot);
     this.scheduleTurnAutomation();
   }
 
@@ -947,7 +1026,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
       snapshot.lastEvent = `${activePlayer.name} zieht${captureText} und gewinnt.`;
       addSystemMessage(snapshot, snapshot.lastEvent);
       this.clearTurnWindow(snapshot);
-      snapshotToSchema(snapshot, this.state);
+      this.applySnapshot(snapshot);
       return;
     }
 
@@ -965,7 +1044,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
 
     this.keepOrStartTurnWindow(snapshot, activePlayer.id);
     snapshot.updatedAt = Date.now();
-    snapshotToSchema(snapshot, this.state);
+    this.applySnapshot(snapshot);
     this.scheduleTurnAutomation();
   }
 
@@ -1017,7 +1096,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     addSystemMessage(snapshot, `${activePlayer.name} ist nicht rechtzeitig dran. Der Computer spielt diesen Zug.`);
     snapshot.lastEvent = `${activePlayer.name} ist nicht rechtzeitig dran. Der Computer übernimmt kurz.`;
     snapshot.updatedAt = Date.now();
-    snapshotToSchema(snapshot, this.state);
+    this.applySnapshot(snapshot);
     this.scheduleTurnAutomation();
   }
 
@@ -1177,7 +1256,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
       return undefined;
     }
 
-    if (process.env.ENABLE_DEBUG_ADMIN !== "1" || !this.isHost(client, snapshot) || !this.adminPlayerIds.has(client.sessionId)) {
+    if (!validAdminSession(client.auth?.adminSession)) {
       this.sendError(client, "Admin-Menü nicht freigeschaltet.");
       return undefined;
     }
@@ -1267,6 +1346,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
         roomId: this.roomId,
         reconnectToken,
       });
+      if (validAdminSession(client.auth?.adminSession)) client.send("adminUnlocked", { message: "Admin-Sitzung aktiv." });
     }, 100);
   }
 
@@ -1292,6 +1372,8 @@ export class MenschRoom extends Room<{ state: MenschState }> {
 
   private removePlayerForModeration(snapshot: GameStateSnapshot, player: PlayerState, reason: string): void {
     player.connected = false;
+    player.isBot = false; // Removed computer seats must not keep taking automated turns.
+    for (const piece of player.pieces) piece.position = -1;
     this.transferHost(snapshot);
     this.deleteTokenForPlayer(player.id);
 
@@ -1513,35 +1595,4 @@ function normalizeGameMode(value: unknown): GameMode {
 function normalizePresetColor(value: unknown): string {
   const color = String(value || "").trim().toLowerCase();
   return Object.values(COLOR_META).some((entry) => entry.hex.toLowerCase() === color) ? color : "";
-}
-
-function loadReportedFilterTerms(): Set<string> {
-  try {
-    if (!existsSync(CHAT_FILTER_DATA_FILE)) {
-      return new Set();
-    }
-
-    const parsed = JSON.parse(readFileSync(CHAT_FILTER_DATA_FILE, "utf8")) as unknown;
-    if (!Array.isArray(parsed)) {
-      return new Set();
-    }
-
-    return new Set(
-      parsed
-        .map((entry) => normalizeReportedFilterTerm(String(entry || "")))
-        .filter((entry): entry is string => Boolean(entry)),
-    );
-  } catch {
-    return new Set();
-  }
-}
-
-async function persistReportedFilterTerms(terms: Set<string>): Promise<void> {
-  const values = [...terms].sort();
-  try {
-    mkdirSync(dirname(CHAT_FILTER_DATA_FILE), { recursive: true });
-    await writeFile(CHAT_FILTER_DATA_FILE, JSON.stringify(values, null, 2), "utf8");
-  } catch {
-    // Moderation reports should not break the room if the local data file is unavailable.
-  }
 }
