@@ -13,9 +13,12 @@ import {
 } from "../../shared/src/constants";
 import type { ChatMessage, GameMode, GameStateSnapshot, PlayerColor, PlayerState } from "../../shared/src/types";
 import { boardAsset, musicAssets, pieceAssets, soundAssets } from "./assets";
-import { AppwriteGameClient, type AppwriteRoom } from "./appwriteTransport";
+import { Client, type Room } from "@colyseus/sdk";
+
 import { Board, type CaptureMarker, type PieceMoveAnimation } from "./Board";
 import { getPieceAssetForColor, useTintedPieceAssets } from "./pieceTint";
+
+type GameRoom = Room<unknown, GameStateSnapshot>;
 
 const DEFAULT_NAME = "Spieler";
 const LAST_ROOM_KEY = "mensch:last-room";
@@ -170,12 +173,12 @@ const DEFAULT_PLAYER_PREFERENCES: PlayerPreferences = {
 };
 
 export function App() {
-  const clientRef = useRef<AppwriteGameClient | null>(null);
+  const clientRef = useRef<Client | null>(null);
   const moveTimeoutRef = useRef<number | null>(null);
   const moveAnimationTimeoutRef = useRef<number | null>(null);
   const stepSoundTimeoutsRef = useRef<number[]>([]);
   const captureMarkerTimeoutsRef = useRef<number[]>([]);
-  const [room, setRoom] = useState<AppwriteRoom | null>(null);
+  const [room, setRoom] = useState<GameRoom | null>(null);
   const [state, setState] = useState<GameStateSnapshot | null>(null);
   const [playerName, setPlayerName] = useState(() => getSavedPlayerNameCookie() || createRandomPlayerName());
   const [hasCustomPlayerName, setHasCustomPlayerName] = useState(() => Boolean(getSavedPlayerNameCookie()));
@@ -337,27 +340,6 @@ export function App() {
     }
   }, [state?.settings.chatFilterEnabled]);
 
-  useEffect(() => {
-    const activePlayer = state ? state.players[state.currentPlayerIndex] : undefined;
-    const shouldAutomate = Boolean(
-      activePlayer &&
-      state?.status === "playing" &&
-      (
-        activePlayer.isBot ||
-        !activePlayer.connected ||
-        Boolean(state.turnDeadlineAt && now >= state.turnDeadlineAt)
-      ),
-    );
-    if (!room || !state || state.hostId !== room.sessionId || !shouldAutomate) {
-      return;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      void room.playHostAutomation();
-    }, activePlayer?.isBot ? 720 : 60);
-    return () => window.clearTimeout(timeoutId);
-  }, [now, room, state]);
-
   async function createRoom(gameMode: GameMode) {
     setBusy(true);
     setErrorMessage("");
@@ -415,8 +397,9 @@ export function App() {
     }
   }
 
-  function attachRoom(joinedRoom: AppwriteRoom) {
+  function attachRoom(joinedRoom: GameRoom) {
     room?.leave();
+    joinedRoom.reconnection.enabled = false;
     setRoom(joinedRoom);
     setJoinCode(joinedRoom.roomId);
     setSelectedPieceId("");
@@ -427,6 +410,10 @@ export function App() {
     setAdminTargetPlayerId(joinedRoom.sessionId);
     setState(normalizeState(joinedRoom.state));
 
+    joinedRoom.onError((_code, message) => {
+      setToastTone("error");
+      setErrorMessage(message || "Verbindung zum Spielserver unterbrochen.");
+    });
     joinedRoom.onStateChange((nextState) => {
       setState(normalizeState(nextState));
     });
@@ -464,7 +451,11 @@ export function App() {
       setErrorMessage(message.message || "Du wurdest aus dem Raum entfernt.");
       playSound("error");
     });
-    joinedRoom.onLeave(() => {
+    joinedRoom.onLeave((code) => {
+      if (code !== 4000 && code !== 4001) {
+        setToastTone("error");
+        setErrorMessage("Verbindung getrennt. Du kannst deinen letzten Raum wieder betreten, solange er noch besteht.");
+      }
       clearMoveAnimationTimers();
       clearCaptureMarkerTimers();
       setRoom(null);
@@ -754,7 +745,7 @@ export function App() {
                 onChange={(event) => setJoinCode(event.target.value)}
                 placeholder="Raumcode"
                 aria-label="Raumcode"
-                enterKeyHint="join"
+                enterKeyHint="go"
               />
               <button type="submit" className="button-secondary" disabled={busy}>
                 Beitreten
@@ -1258,7 +1249,7 @@ function LobbyStage({
             <ThemeToggle themeMode={themeMode} onToggle={onToggleTheme} />
 
             <p className="status-line">
-              Host: {host?.name || "wartet"} {isHost ? "· du hast die Admin-Rechte" : ""}
+              Host: {host?.name || "wartet"} {isHost ? "· du verwaltest die Lobby" : ""}
             </p>
 
             <div className="lobby-status-strip">
@@ -1726,7 +1717,7 @@ function AdminDock({
   targetPlayerId,
   onTargetPlayer,
 }: {
-  room: AppwriteRoom;
+  room: GameRoom;
   state: GameStateSnapshot;
   meId: string;
   targetPlayerId: string;
@@ -1897,7 +1888,7 @@ function AudioPlayer({
     onPreferencesChange((current) => ({ ...current, ...patch }));
   };
   const playCurrentTrack = () => {
-    if (!audio) {
+    if (!audio || !currentTrack.src) {
       return;
     }
 
@@ -1914,6 +1905,7 @@ function AudioPlayer({
     }));
   };
   const toggleMusic = () => {
+    if (!currentTrack.src) return;
     if (!audio) {
       updatePreference({ musicEnabled: !preferences.musicEnabled });
       return;
@@ -2020,13 +2012,13 @@ function AudioPlayer({
                 <span>{currentTrack.artist}</span>
               </div>
               <div className="audio-player__controls">
-                <button type="button" onClick={() => changeTrack(-1)} aria-label="Vorheriger Track">
+                <button type="button" disabled={!currentTrack.src} onClick={() => changeTrack(-1)} aria-label="Vorheriger Track">
                   Zurück
                 </button>
-                <button type="button" className="audio-player__play" onClick={toggleMusic}>
+                <button type="button" className="audio-player__play" disabled={!currentTrack.src} onClick={toggleMusic}>
                   {preferences.musicEnabled ? "Pause" : "Play"}
                 </button>
-                <button type="button" onClick={() => changeTrack(1)} aria-label="Nächster Track">
+                <button type="button" disabled={!currentTrack.src} onClick={() => changeTrack(1)} aria-label="Nächster Track">
                   Skip
                 </button>
               </div>
@@ -2442,7 +2434,7 @@ function normalizeState(rawState: unknown): GameStateSnapshot {
   const value = typeof (rawState as { toJSON?: () => unknown })?.toJSON === "function"
     ? (rawState as { toJSON: () => unknown }).toJSON()
     : rawState;
-  const snapshot = value as GameStateSnapshot;
+  const snapshot = (value || {}) as GameStateSnapshot;
 
   return {
     roomId: snapshot.roomId || "",
@@ -2750,9 +2742,9 @@ function secondsToMs(value: unknown): number {
   return clampTurnTimeSeconds(value) * 1000;
 }
 
-function getClient(clientRef: MutableRefObject<AppwriteGameClient | null>): AppwriteGameClient {
+function getClient(clientRef: MutableRefObject<Client | null>): Client {
   if (!clientRef.current) {
-    clientRef.current = new AppwriteGameClient();
+    clientRef.current = new Client(window.location.origin);
   }
 
   return clientRef.current;
@@ -2793,7 +2785,9 @@ function getPlayerStatus(ready: boolean, connected: boolean, isBot: boolean, act
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
-    return error.message;
+    return /fetch|network|websocket/i.test(error.message)
+      ? "Spielserver nicht erreichbar. Prüfe, ob der Server läuft und der Tunnel noch aktiv ist."
+      : error.message;
   }
 
   return "Verbindung fehlgeschlagen.";
@@ -2923,7 +2917,9 @@ function playUiSound(sound: UiSoundName, preferences: PlayerPreferences, volumeS
     return;
   }
 
-  const audio = new Audio(getSoundAsset(sound, preferences.clickSoundPreset));
+  const source = getSoundAsset(sound, preferences.clickSoundPreset);
+  if (!source) return;
+  const audio = new Audio(source);
   audio.volume = volume;
   audio.playbackRate = getSoundPlaybackRate(sound, preferences.clickSoundPreset);
   void audio.play().catch(() => undefined);
@@ -2939,6 +2935,7 @@ function getSharedMusicAudio() {
 }
 
 function ensureMusicSource(audio: HTMLAudioElement, source: string) {
+  if (!source) return false;
   const resolvedSource = getResolvedAssetUrl(source);
   if (audio.src === resolvedSource) {
     return false;

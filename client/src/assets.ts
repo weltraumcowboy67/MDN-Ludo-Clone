@@ -7,8 +7,8 @@ import type { PlayerColor } from "../../shared/src/types";
 
 export const boardAsset = boardImage;
 
-const silentAudio =
-  "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
+// Audio is optional. Empty sources are never passed to the media player.
+const silentAudio = "";
 
 export const pieceAssets: Record<PlayerColor, string> = {
   red: redPiece,

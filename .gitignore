@@ -12,6 +12,7 @@ dist/
 # Local environment and secrets
 .env
 .env.*
+!.env.example
 *.local
 *.pem
 *.key
@@ -35,3 +36,8 @@ public/audio/
 # OS/editor noise
 .DS_Store
 Thumbs.db
+
+# Local tooling and browser verification
+.tools/
+.playwright-cli/
+output/playwright/

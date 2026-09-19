@@ -8,9 +8,13 @@ import { WebSocketTransport } from "@colyseus/ws-transport";
 import { MenschRoom } from "./rooms/MenschRoom";
 
 const port = Number(process.env.PORT || 2567);
+if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  throw new Error("PORT muss zwischen 1 und 65535 liegen.");
+}
 const app = express();
 
-app.use(cors());
+// Browser clients use the same origin, including through a Quick Tunnel.
+app.use(cors({ origin: false }));
 app.use(express.json());
 app.get("/health", (_request, response) => {
   response.json({
@@ -20,13 +24,13 @@ app.get("/health", (_request, response) => {
   });
 });
 
-const clientDistPath = process.env.CLIENT_DIST_PATH || path.join(process.cwd(), "dist", "client");
+const clientDistPath = process.env.CLIENT_DIST_PATH || path.resolve("dist", "client");
 const clientIndexPath = path.join(clientDistPath, "index.html");
 
 if (existsSync(clientIndexPath)) {
   app.use(express.static(clientDistPath));
   app.use((request, response, next) => {
-    if (request.path.startsWith("/matchmake")) {
+    if (request.path.startsWith("/matchmake") || request.method !== "GET" || path.extname(request.path)) {
       next();
       return;
     }
@@ -55,5 +59,12 @@ const gameServer = new Server({
 
 gameServer.define("mensch", MenschRoom);
 
-gameServer.listen(port);
-console.log(`Colyseus Server läuft auf ws://localhost:${port}`);
+try {
+  await gameServer.listen(port, "127.0.0.1");
+  console.log(`Spiel: http://127.0.0.1:${port} | Healthcheck: http://127.0.0.1:${port}/health`);
+} catch (error) {
+  console.error((error as NodeJS.ErrnoException).code === "EADDRINUSE"
+    ? `Port ${port} ist belegt. Beende den anderen Server oder ändere PORT in .env.`
+    : error);
+  process.exit(1);
+}

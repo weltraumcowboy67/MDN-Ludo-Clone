@@ -1,4 +1,4 @@
-import { randomInt } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -92,48 +92,51 @@ export class MenschRoom extends Room<{ state: MenschState }> {
   private readonly forcedDiceByPlayerId = new Map<string, number>();
   private automationTimeout: { clear: () => void } | null = null;
   private autoPlayPlayerId = "";
+  private emptyRoomTimeout: { clear: () => void } | null = null;
 
   onCreate(options: JoinOptions): void {
     const gameMode = normalizeGameMode(options.gameMode);
     this.maxClients = gameMode === "singleplayer" ? 1 : getMaxPlayersForMode(gameMode);
-    this.autoDispose = true;
+    // Keep seats briefly when the last browser reloads or loses its connection.
+    this.autoDispose = false;
+    this.scheduleEmptyRoomDisposal();
     this.setState(new MenschState());
     const initialSnapshot = createInitialSnapshot(this.roomId, Boolean(options.strikeRequired), gameMode);
     initialSnapshot.settings.turnTimeLimitMs = clampTurnTimeLimit(options.turnTimeLimitMs);
     snapshotToSchema(initialSnapshot, this.state);
 
     this.onMessage("toggleReady", (client, message: { ready?: boolean }) => {
-      this.handleReady(client, Boolean(message.ready));
+      this.handleReady(client, Boolean(message?.ready));
     });
     this.onMessage("setStrikeRequired", (client, message: { enabled?: boolean }) => {
-      this.handleStrikeRequired(client, Boolean(message.enabled));
+      this.handleStrikeRequired(client, Boolean(message?.enabled));
     });
     this.onMessage("setChatFilter", (client, message: { enabled?: boolean }) => {
-      this.handleChatFilter(client, Boolean(message.enabled));
+      this.handleChatFilter(client, Boolean(message?.enabled));
     });
     this.onMessage("setTurnTimeLimit", (client, message: { turnTimeLimitMs?: number }) => {
-      this.handleTurnTimeLimit(client, message.turnTimeLimitMs);
+      this.handleTurnTimeLimit(client, message?.turnTimeLimitMs);
     });
     this.onMessage("setCustomColor", (client, message: { customColor?: string }) => {
-      this.handleCustomColor(client, String(message.customColor || ""));
+      this.handleCustomColor(client, String(message?.customColor || ""));
     });
     this.onMessage("setPlayerColor", (client, message: { color?: PlayerColor }) => {
-      this.handlePlayerColor(client, message.color);
+      this.handlePlayerColor(client, message?.color);
     });
     this.onMessage("startGame", (client) => {
       this.handleStartGame(client);
     });
     this.onMessage("kickPlayer", (client, message: { playerId?: string }) => {
-      this.handleKickPlayer(client, String(message.playerId || ""));
+      this.handleKickPlayer(client, String(message?.playerId || ""));
     });
     this.onMessage("rollDice", (client) => {
       this.handleRoll(client);
     });
     this.onMessage("movePiece", (client, message: { pieceId?: string }) => {
-      this.handleMove(client, String(message.pieceId || ""));
+      this.handleMove(client, String(message?.pieceId || ""));
     });
     this.onMessage("sendChat", (client, message: { text?: string }) => {
-      this.handleChat(client, String(message.text || ""));
+      this.handleChat(client, String(message?.text || ""));
     });
     this.onMessage("reportChatWord", (client, message: ChatReportPayload) => {
       this.handleChatReport(client, message);
@@ -145,25 +148,25 @@ export class MenschRoom extends Room<{ state: MenschState }> {
       this.handleAddBot(client);
     });
     this.onMessage("adminSetDiceBias", (client, message: AdminDiceBiasPayload = {}) => {
-      this.handleAdminDiceBias(client, message.mode, String(message.playerId || ""));
+      this.handleAdminDiceBias(client, message?.mode, String(message?.playerId || ""));
     });
     this.onMessage("adminForceDice", (client, message: AdminForceDicePayload = {}) => {
-      this.handleAdminForceDice(client, message.value, String(message.playerId || ""));
+      this.handleAdminForceDice(client, message?.value, String(message?.playerId || ""));
     });
     this.onMessage("adminSkipTurn", (client) => {
       this.handleAdminSkipTurn(client);
     });
     this.onMessage("adminGiveTurn", (client, message: AdminPlayerPayload = {}) => {
-      this.handleAdminGiveTurn(client, String(message.playerId || ""));
+      this.handleAdminGiveTurn(client, String(message?.playerId || ""));
     });
     this.onMessage("adminResetPlayerPieces", (client, message: AdminPlayerPayload = {}) => {
-      this.handleAdminResetPlayerPieces(client, String(message.playerId || ""));
+      this.handleAdminResetPlayerPieces(client, String(message?.playerId || ""));
     });
     this.onMessage("adminKickPlayer", (client, message: AdminPlayerPayload = {}) => {
-      this.handleAdminKickPlayer(client, String(message.playerId || ""));
+      this.handleAdminKickPlayer(client, String(message?.playerId || ""));
     });
     this.onMessage("adminBanPlayerIp", (client, message: AdminPlayerPayload = {}) => {
-      this.handleAdminBanPlayerIp(client, String(message.playerId || ""));
+      this.handleAdminBanPlayerIp(client, String(message?.playerId || ""));
     });
   }
 
@@ -177,6 +180,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     }
 
     if (reconnectToken && this.reconnectPlayer(client, snapshot, reconnectToken, clientIp)) {
+      this.emptyRoomTimeout?.clear();
       snapshot.updatedAt = Date.now();
       snapshotToSchema(snapshot, this.state);
       this.sendSessionInfo(client, reconnectToken);
@@ -229,7 +233,8 @@ export class MenschRoom extends Room<{ state: MenschState }> {
       snapshot.hostId = client.sessionId;
     }
 
-    const playerToken = createId("seat");
+    this.emptyRoomTimeout?.clear();
+    const playerToken = randomUUID();
     this.playerTokens.set(playerToken, color);
     this.tokenByPlayerId.set(client.sessionId, playerToken);
     if (clientIp) {
@@ -246,6 +251,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
 
     snapshot.players = sortPlayersClockwise(snapshot.players, snapshot.gameMode);
     snapshot.currentPlayerIndex = 0;
+    this.transferHost(snapshot);
     snapshot.lastEvent = `${resolvedPlayerName} ist beigetreten.`;
     addSystemMessage(snapshot, `${resolvedPlayerName} ist dem Spiel beigetreten.`);
     snapshot.updatedAt = Date.now();
@@ -254,6 +260,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
   }
 
   onLeave(client: Client): void {
+    if (this.clients.length === 0) this.scheduleEmptyRoomDisposal();
     if (this.kickedPlayerIds.delete(client.sessionId)) {
       return;
     }
@@ -282,12 +289,30 @@ export class MenschRoom extends Room<{ state: MenschState }> {
       }
     }
 
+    this.transferHost(snapshot);
     snapshot.updatedAt = Date.now();
     snapshotToSchema(snapshot, this.state);
     this.scheduleTurnAutomation();
   }
 
+  private scheduleEmptyRoomDisposal(): void {
+    this.emptyRoomTimeout?.clear();
+    this.emptyRoomTimeout = this.clock.setTimeout(() => {
+      if (this.clients.length === 0) void this.disconnect();
+    }, 60_000);
+  }
+
+  private transferHost(snapshot: GameStateSnapshot): void {
+    if (snapshot.players.some((player) => player.id === snapshot.hostId && player.connected)) return;
+    const nextHost = snapshot.players.find((player) => player.connected && !player.isBot);
+    if (nextHost) {
+      this.hostId = nextHost.id;
+      snapshot.hostId = nextHost.id;
+    }
+  }
+
   onDispose(): void {
+    this.emptyRoomTimeout?.clear();
     this.clearAutomationTimeout();
   }
 
@@ -539,7 +564,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
       return;
     }
 
-    if (isAdminTrigger(text)) {
+    if (isAdminTrigger(text) && process.env.ENABLE_DEBUG_ADMIN === "1" && this.isHost(client, snapshot)) {
       this.adminPlayerIds.add(player.id);
       snapshot.chat.push({
         id: createId("chat"),
@@ -580,8 +605,8 @@ export class MenschRoom extends Room<{ state: MenschState }> {
       return;
     }
 
-    const messageId = String(message.messageId || "").trim().slice(0, 80);
-    const normalizedTerm = normalizeReportedFilterTerm(String(message.word || ""));
+    const messageId = String(message?.messageId || "").trim().slice(0, 80);
+    const normalizedTerm = normalizeReportedFilterTerm(String(message?.word || ""));
     if (!messageId || !normalizedTerm) {
       this.sendError(client, "Bitte ein Wort aus der Nachricht eintragen.");
       return;
@@ -620,6 +645,11 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     const player = snapshot.players.find((entry) => entry.id === client.sessionId);
     if (!player) {
       this.sendError(client, "Spieler nicht gefunden.");
+      return;
+    }
+
+    if (snapshot.status !== "finished") {
+      this.sendError(client, "Eine Revanche ist erst nach Spielende möglich.");
       return;
     }
 
@@ -1147,7 +1177,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
       return undefined;
     }
 
-    if (!this.adminPlayerIds.has(client.sessionId)) {
+    if (process.env.ENABLE_DEBUG_ADMIN !== "1" || !this.isHost(client, snapshot) || !this.adminPlayerIds.has(client.sessionId)) {
       this.sendError(client, "Admin-Menü nicht freigeschaltet.");
       return undefined;
     }
@@ -1261,6 +1291,8 @@ export class MenschRoom extends Room<{ state: MenschState }> {
   }
 
   private removePlayerForModeration(snapshot: GameStateSnapshot, player: PlayerState, reason: string): void {
+    player.connected = false;
+    this.transferHost(snapshot);
     this.deleteTokenForPlayer(player.id);
 
     if (snapshot.status === "lobby") {
