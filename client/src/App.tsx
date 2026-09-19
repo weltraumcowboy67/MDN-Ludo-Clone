@@ -1,3 +1,5 @@
+import { Invitation } from "./Invitation";
+import { readInvitation } from "./invitations";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, Dispatch, FormEvent, MutableRefObject, SetStateAction } from "react";
 import { ArrowLeft, BookOpen, Dices, LogOut, Moon, Send, Settings, Shield, Sun, X } from "lucide-react";
@@ -183,7 +185,7 @@ export function App() {
   const [playerName, setPlayerName] = useState(() => getSavedPlayerNameCookie() || createRandomPlayerName());
   const [hasCustomPlayerName, setHasCustomPlayerName] = useState(() => Boolean(getSavedPlayerNameCookie()));
   const [selectedColor, setSelectedColor] = useState<PlayerColor>("blue");
-  const [joinCode, setJoinCode] = useState("");
+  const [joinCode, setJoinCode] = useState(() => readInvitation(location.search));
   const [strikeRequired, setStrikeRequired] = useState(false);
   const [turnTimeSeconds, setTurnTimeSeconds] = useState(DEFAULT_TURN_TIME_LIMIT_MS / 1000);
   const [selectedPieceId, setSelectedPieceId] = useState("");
@@ -197,7 +199,7 @@ export function App() {
   const [savedRoom, setSavedRoom] = useState<SavedRoomSession | null>(() => getSavedRoomSession());
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getSavedThemeMode());
   const [playerPreferences, setPlayerPreferences] = useState<PlayerPreferences>(() => getSavedPlayerPreferences());
-  const [selectedGameId, setSelectedGameId] = useState<PortalGameId | null>(null);
+  const [selectedGameId, setSelectedGameId] = useState<PortalGameId | null>(() => readInvitation(location.search) ? PORTAL_GAMES[0].id : null);
   const [createModeOpen, setCreateModeOpen] = useState(false);
   const [adminUnlocked, setAdminUnlocked] = useState(false);
   const [adminTargetPlayerId, setAdminTargetPlayerId] = useState("");
@@ -687,7 +689,7 @@ export function App() {
               <div>
                 <p className="eyebrow">{selectedPortalGame.eyebrow}</p>
                 <h1>{selectedPortalGame.title}</h1>
-                <p className="lede">Raum erstellen, Code teilen, losspielen.</p>
+                <p className="lede">Zusammen an einem Brett. Erstelle eine Runde oder tritt deiner Einladung bei.</p>
               </div>
               <ThemeToggle themeMode={themeMode} onToggle={toggleTheme} />
             </div>
@@ -1240,10 +1242,7 @@ function LobbyStage({
                 <h1>Warten auf Spieler</h1>
               </div>
               {state.gameMode !== "singleplayer" ? (
-                <div className="room-code-box">
-                  <span>Code</span>
-                  <strong>{state.roomId}</strong>
-                </div>
+                <Invitation roomId={state.roomId}/>
               ) : null}
             </div>
             <ThemeToggle themeMode={themeMode} onToggle={onToggleTheme} />
@@ -2130,12 +2129,7 @@ function TrophyIcon() {
 }
 
 function RoomCodeBadge({ roomId }: { roomId: string }) {
-  return (
-    <div className="room-code-chip" aria-label={`Raumcode ${roomId}`}>
-      <span>Raumcode</span>
-      <strong>{roomId}</strong>
-    </div>
-  );
+  return <Invitation roomId={roomId}/>;
 }
 
 function DoorBackIcon() {
