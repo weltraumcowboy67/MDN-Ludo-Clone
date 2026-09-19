@@ -1,3 +1,5 @@
+import { createRandomPlayerName } from "./playerNames";
+import { Modal } from "./Modal";
 import { Invitation } from "./Invitation";
 import { readInvitation } from "./invitations";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -28,23 +30,6 @@ const THEME_STORAGE_KEY = "mensch:theme";
 const PLAYER_PREFS_STORAGE_KEY = "mensch:player-prefs:v2";
 const COOKIE_CONSENT_KEY = "mensch_cookie_ok";
 const PLAYER_NAME_COOKIE_KEY = "mensch_player_name";
-const RANDOM_NAME_PREFIXES = [
-  "LouiBär",
-  "FreddyFazbear",
-  "KeksKaiser",
-  "WürfelWilly",
-  "TurboTina",
-  "PöppelPaul",
-  "MemeMaja",
-  "RundenRudi",
-  "LudoLena",
-  "KäseKönig",
-  "KaroKalle",
-  "MashaToll",
-  "RosaRakete",
-  "FlinkerFuchs",
-];
-const RANDOM_NAME_SUFFIXES = ["83", "17", "404", "7", "21", "99", "11", "42", "58", "2077"];
 const DICE_VALUES = [1, 2, 3, 4, 5, 6] as const;
 const DICE_PIPS: Record<number, number[]> = {
   1: [5],
@@ -360,6 +345,7 @@ export function App() {
       attachRoom(joinedRoom);
       playSound("confirm");
     } catch (error) {
+      setCreateModeOpen(false);
       setToastTone("error");
       setErrorMessage(getErrorMessage(error));
     } finally {
@@ -665,7 +651,7 @@ export function App() {
             onToggleTheme={toggleTheme}
             onSelectGame={selectPortalGame}
           />
-          {errorMessage ? <div className={`toast toast--${toastTone}`}>{errorMessage}</div> : null}
+          {errorMessage ? <div role="status" className={`toast toast--${toastTone}`}>{errorMessage}</div> : null}
           {!cookieConsentAccepted ? <CookieNotice onAccept={acceptCookies} /> : null}
         </main>
       );
@@ -735,7 +721,7 @@ export function App() {
 
           <div className="entry-join">
             <span>Raum beitreten</span>
-            <form
+            <form noValidate
               className="join-row"
               onSubmit={(event) => {
                 event.preventDefault();
@@ -773,7 +759,7 @@ export function App() {
           </div>
         </section>
 
-        {errorMessage ? <div className={`toast toast--${toastTone}`}>{errorMessage}</div> : null}
+        {errorMessage ? <div role="status" className={`toast toast--${toastTone}`}>{errorMessage}</div> : null}
         {!cookieConsentAccepted ? <CookieNotice onAccept={acceptCookies} /> : null}
         {rulesOpen ? <RulesDialog onClose={() => setRulesOpen(false)} /> : null}
         {createModeOpen ? (
@@ -823,7 +809,7 @@ export function App() {
             onTargetPlayer={setAdminTargetPlayerId}
           />
         ) : null}
-        {errorMessage ? <div className={`toast toast--${toastTone}`}>{errorMessage}</div> : null}
+        {errorMessage ? <div role="status" className={`toast toast--${toastTone}`}>{errorMessage}</div> : null}
         {!cookieConsentAccepted ? <CookieNotice onAccept={acceptCookies} /> : null}
         {rulesOpen ? <RulesDialog onClose={() => setRulesOpen(false)} /> : null}
         {chatReportTarget && state.settings.chatFilterEnabled ? (
@@ -844,7 +830,7 @@ export function App() {
       <TurnTimerHud state={state} now={now} />
       <section className="top-bar">
         <div>
-          <p className="eyebrow">Partie läuft</p>
+          <p className="eyebrow">{state.status === "paused" ? "Partie pausiert" : "Partie läuft"}</p>
           <h1>Mensch ärgere dich nicht</h1>
         </div>
         <div className="top-actions">
@@ -861,6 +847,10 @@ export function App() {
         </div>
       </section>
 
+      {state.status === "paused" && <section className="pause-banner" role="status">
+        <div><strong>Deine Partie wartet.</strong><p>Alle Figuren und der letzte Wurf sind gespeichert.</p></div>
+        {(isHost || adminUnlocked) ? <button onClick={()=>room.send("resumeGame")}>Partie fortsetzen</button> : <span>Der Host setzt die Partie fort.</span>}
+      </section>}
       <section className="game-layout">
         <aside className="players-rail">
           <PlayersPanel
@@ -935,7 +925,7 @@ export function App() {
           onTargetPlayer={setAdminTargetPlayerId}
         />
       ) : null}
-      {errorMessage ? <div className={`toast toast--${toastTone}`}>{errorMessage}</div> : null}
+      {errorMessage ? <div role="status" className={`toast toast--${toastTone}`}>{errorMessage}</div> : null}
       {!cookieConsentAccepted ? <CookieNotice onAccept={acceptCookies} /> : null}
       {rulesOpen ? <RulesDialog onClose={() => setRulesOpen(false)} /> : null}
       {chatReportTarget && state.settings.chatFilterEnabled ? (
@@ -1043,10 +1033,10 @@ function CookieNotice({ onAccept }: { onAccept: () => void }) {
   return (
     <aside className="cookie-notice" aria-label="Cookie-Hinweis">
       <div>
-        <strong>Cookies erlauben?</strong>
-        <p>Wir speichern deine Zustimmung und deinen Namen nur, wenn du ihn änderst.</p>
+        <strong>Deine Runde bleibt bei dir</strong>
+        <p>Name, Darstellung und dein Zugang zur letzten Partie werden nur in diesem Browser gespeichert.</p>
       </div>
-      <button type="button" onClick={onAccept}>Akzeptieren</button>
+      <button type="button" onClick={onAccept}>Verstanden</button>
     </aside>
   );
 }
@@ -1102,7 +1092,7 @@ function CreateModeDialog({
   onClose: () => void;
 }) {
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Spielmodus auswählen">
+    <Modal label="Spielmodus auswählen" onClose={onClose}>
       <section className="rules-dialog create-mode-dialog">
         <div className="dialog-head">
           <div>
@@ -1129,7 +1119,7 @@ function CreateModeDialog({
           ))}
         </div>
       </section>
-    </div>
+    </Modal>
   );
 }
 
@@ -1147,7 +1137,7 @@ function ColorPickerDialog({
   onClose: () => void;
 }) {
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Farbe auswählen">
+    <Modal label="Farbe auswählen" onClose={onClose}>
       <section className="rules-dialog color-picker-dialog">
         <div className="dialog-head">
           <div>
@@ -1165,7 +1155,7 @@ function ColorPickerDialog({
           onChange={onChange}
         />
       </section>
-    </div>
+    </Modal>
   );
 }
 
@@ -1757,11 +1747,7 @@ function AdminDock({
     room.send("adminKickPlayer", { playerId });
   };
 
-  const banPlayerIp = (player: PlayerState) => {
-    if (window.confirm(`${player.name} per IP sperren?`)) {
-      room.send("adminBanPlayerIp", { playerId: player.id });
-    }
-  };
+
 
   return (
     <div className="admin-dock">
@@ -1831,7 +1817,7 @@ function AdminDock({
           </div>
 
           <div className="admin-section">
-            <p className="admin-section__title">Spieler anklicken</p>
+            <p className="admin-section__title">Spieler anklicken</p><a href="/login">Meldungen und Partien verwalten</a>
             <div className="admin-player-list">
               {state.players.map((player) => (
                 <div
@@ -1855,12 +1841,7 @@ function AdminDock({
                   }}>
                     Raus
                   </button>
-                  <button type="button" disabled={player.isBot || player.id === meId} onClick={(event) => {
-                    event.stopPropagation();
-                    banPlayerIp(player);
-                  }}>
-                    IP sperren
-                  </button>
+
                 </div>
               ))}
             </div>
@@ -2273,6 +2254,7 @@ interface ChatPanelProps {
 
 function ChatPanel({ state, chatText, onChatText, onSendChat, onReportMessage }: ChatPanelProps) {
   const chatLogRef = useRef<HTMLDivElement | null>(null);
+  const [chatOpen, setChatOpen] = useState(() => !window.matchMedia("(max-width: 760px)").matches);
   const canReportMessages = state.settings.chatFilterEnabled;
   const latestChatSignature = state.chat.at(-1)
     ? `${state.chat.at(-1)?.id}:${state.chat.at(-1)?.text}`
@@ -2293,7 +2275,8 @@ function ChatPanel({ state, chatText, onChatText, onSendChat, onReportMessage }:
 
   return (
     <section className="panel-block chat-panel">
-      <p className="eyebrow">Chat {state.settings.chatFilterEnabled ? "· Filter aktiv" : ""}</p>
+      <button className="chat-disclosure button-secondary" type="button" aria-expanded={chatOpen} onClick={()=>setChatOpen(!chatOpen)}>Chat · {state.chat.filter(m=>m.color!=="system").length} Nachrichten <span>{chatOpen?"−":"+"}</span></button>
+      <div className="chat-content" hidden={!chatOpen}>
       <div className="chat-log" aria-live="polite" ref={chatLogRef}>
         {state.chat.length === 0 ? <p className="empty-chat">Noch keine Nachrichten.</p> : null}
         {state.chat.map((message) => {
@@ -2329,12 +2312,13 @@ function ChatPanel({ state, chatText, onChatText, onSendChat, onReportMessage }:
           );
         })}
       </div>
-      <form className="chat-form" onSubmit={onSendChat}>
+      <form noValidate className="chat-form" onSubmit={onSendChat}>
         <input
           value={chatText}
           maxLength={240}
           onChange={(event) => onChatText(event.target.value)}
           placeholder="Nachricht"
+          aria-label="Nachricht"
           enterKeyHint="send"
         />
         <button type="submit">
@@ -2342,6 +2326,7 @@ function ChatPanel({ state, chatText, onChatText, onSendChat, onReportMessage }:
           Senden
         </button>
       </form>
+      </div>
     </section>
   );
 }
@@ -2356,7 +2341,7 @@ interface ChatReportDialogProps {
 
 function ChatReportDialog({ message, word, onWordChange, onSubmit, onClose }: ChatReportDialogProps) {
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Nachricht melden">
+    <Modal label="Nachricht melden" onClose={onClose}>
       <section className="rules-dialog report-dialog">
         <div className="dialog-head">
           <div>
@@ -2372,9 +2357,9 @@ function ChatReportDialog({ message, word, onWordChange, onSubmit, onClose }: Ch
           <strong>{message.playerName}:</strong> {message.text}
         </blockquote>
 
-        <form className="report-form" onSubmit={onSubmit}>
+        <form noValidate className="report-form" onSubmit={onSubmit}>
           <label>
-            Welches Wort soll ab jetzt gefiltert werden?
+            Welchen Begriff soll der Admin prüfen?
             <input
               value={word}
               maxLength={40}
@@ -2384,20 +2369,20 @@ function ChatReportDialog({ message, word, onWordChange, onSubmit, onClose }: Ch
             />
           </label>
           <div className="button-row">
-            <button type="submit" disabled={!word.trim()}>Zur Filterliste hinzufügen</button>
+            <button type="submit" disabled={!word.trim()}>Meldung senden</button>
             <button type="button" className="button-secondary" onClick={onClose}>
               Abbrechen
             </button>
           </div>
         </form>
       </section>
-    </div>
+    </Modal>
   );
 }
 
 function RulesDialog({ onClose }: { onClose: () => void }) {
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Spielregeln">
+    <Modal label="Spielregeln" onClose={onClose}>
       <section className="rules-dialog">
         <div className="dialog-head">
           <div>
@@ -2420,7 +2405,7 @@ function RulesDialog({ onClose }: { onClose: () => void }) {
           <li>Nach jeder Sechs gibt es einen weiteren Wurf, auch wenn kein Zug möglich war.</li>
         </ul>
       </section>
-    </div>
+    </Modal>
   );
 }
 
@@ -2616,11 +2601,6 @@ function getMoveStepCount(from: number, to: number): number {
   return Math.max(1, Math.abs(to - from));
 }
 
-function createRandomPlayerName(): string {
-  const prefix = RANDOM_NAME_PREFIXES[Math.floor(Math.random() * RANDOM_NAME_PREFIXES.length)] || DEFAULT_NAME;
-  const suffix = RANDOM_NAME_SUFFIXES[Math.floor(Math.random() * RANDOM_NAME_SUFFIXES.length)] || "42";
-  return `${prefix}${suffix}`.slice(0, 24);
-}
 
 function createEmptyDiceRollStats(): DiceRollStats {
   return {

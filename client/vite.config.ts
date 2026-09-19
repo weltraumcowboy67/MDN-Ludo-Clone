@@ -13,13 +13,14 @@ export default defineConfig(({ mode }) => {
       strictPort: true,
       allowedHosts: [".trycloudflare.com"],
       proxy: {
+      "/api": { target: `http://127.0.0.1:${serverPort}`, changeOrigin: false },
         "/matchmake": {
           target: `http://127.0.0.1:${serverPort}`,
-          changeOrigin: true,
+          changeOrigin: false,
         },
         "^/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+(?:\\?.*)?$": {
           target: `ws://127.0.0.1:${serverPort}`,
-          changeOrigin: true,
+          changeOrigin: false,
           ws: true,
         },
       },
