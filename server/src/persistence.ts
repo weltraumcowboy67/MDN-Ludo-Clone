@@ -11,6 +11,11 @@ export interface SavedGame {
 }
 const pendingRestore = new Map<string, SavedGame>();
 const validId = (id: string) => /^[A-Za-z0-9_-]{1,64}$/.test(id);
+export function deleteGame(id: string): void {
+  if (!validId(id)) throw new Error("Ungültige Raumkennung.");
+  const file = dataPath("games", `${id}.json`);
+  if (existsSync(file)) unlinkSync(file);
+}
 export function saveGame(game: SavedGame) {
   const id = game.snapshot.roomId;
   if (!validId(id)) throw new Error("Ungültige Raumkennung.");

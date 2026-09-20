@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { COLOR_META } from "../shared/src/constants";
 import express from "express";
 import { randomBytes, scryptSync } from "node:crypto";
 import { adminRoutes } from "../server/src/adminRoutes";
@@ -427,4 +428,110 @@ test("reports only affect global filter after explicit admin approval", async ()
       room.state.chat.find((m: any) => m.id === message.id).text !==
       "Zitronenkeks Testwort",
   );
+});
+
+test("singleplayer starts directly and all visual colors work without moving the seat", async () => {
+  const host = await create({ gameMode: "singleplayer", botCount: 3 });
+  const seat = host.state.players.find(
+    (p: any) => p.id === host.sessionId,
+  ).color;
+  for (const { hex } of Object.values(COLOR_META)) {
+    host.send("setCustomColor", { customColor: hex });
+    await until(
+      () =>
+        host.state.players.find((p: any) => p.id === host.sessionId)
+          .customColor === hex,
+    );
+    assert.equal(
+      new Set(host.state.players.map((p: any) => p.customColor)).size,
+      4,
+    );
+  }
+  assert.equal(
+    host.state.players.find((p: any) => p.id === host.sessionId).color,
+    seat,
+  );
+  host.send("startGame");
+  await until(() => host.state.status === "playing");
+});
+
+test("empty room timeout deletes its saved game; reconnect cancels the timeout", async () => {
+  const { existsSync } = await import("node:fs");
+  const { dataPath } = await import("../server/src/storage");
+  const host = await create({ gameMode: "singleplayer", botCount: 1 });
+  let token = "";
+  host.onMessage("sessionInfo", (m) => (token = m.reconnectToken));
+  await until(() => Boolean(token));
+  host.send("startGame");
+  await until(() => host.state.status === "playing");
+  const serverRoom = local(host);
+  const path = dataPath("games", `${host.roomId}.json`);
+  assert.equal(existsSync(path), true);
+  await host.leave();
+  await pause(70);
+  const resumed = track(
+    await client.joinById(host.roomId, { reconnectToken: token }),
+  );
+  await until(() => resumed.state?.status === "paused");
+  serverRoom.clock.currentTime -= 60_001;
+  serverRoom.clock.tick();
+  assert.equal(existsSync(path), true);
+  await resumed.leave();
+  await pause(70);
+  serverRoom.clock.currentTime -= 60_001;
+  serverRoom.clock.tick();
+  await until(() => !existsSync(path));
+});
+
+test("admin can observe a full active game without taking a seat, anonymous clients cannot", async () => {
+  const host = await create({ gameMode: "singleplayer", botCount: 3 });
+  host.send("startGame");
+  await until(() => host.state.status === "playing");
+  const response = await fetch(`${endpoint}/api/admin/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "test-admin", password: testPassword }),
+  });
+  const cookie = response.headers.get("set-cookie")!.split(";")[0];
+  const admin = new Client(endpoint, { headers: { Cookie: cookie } });
+  const observer = track(
+    await admin.joinById(host.roomId, { spectator: true }),
+  );
+  observer.onMessage("adminUnlocked", () => {});
+  observer.onMessage("adminActionAccepted", () => {});
+  await until(() => observer.state?.players?.length === 4);
+  assert.equal(
+    observer.state.players.some((p: any) => p.id === observer.sessionId),
+    false,
+  );
+  let accepted = false;
+  observer.onMessage("adminActionAccepted", () => (accepted = true));
+  observer.send("adminForceDice", { value: 6, playerId: host.sessionId });
+  await until(() => accepted);
+  await assert.rejects(
+    client.joinById(host.roomId, { spectator: true }),
+    /lokale Admin/,
+  );
+});
+
+test("filter list exposes built-ins and supports adding, editing and disabling terms", async () => {
+  const { filterTerms, saveTerm, removeTerm, disabledTerms } =
+    await import("../server/src/moderation");
+  const { filterChatText } = await import("../shared/src/chatFilter");
+  assert.ok(filterTerms().some((t) => t.builtin && t.term === "depp"));
+  saveTerm("Sonnenprobe");
+  saveTerm("Mondprobe", "Sonnenprobe");
+  assert.equal(approvedTerms.has("sonnenprobe"), false);
+  assert.equal(approvedTerms.has("mondprobe"), true);
+  removeTerm("depp");
+  assert.equal(
+    filterChatText("depp", { disabledPhrases: [...disabledTerms] }),
+    "depp",
+  );
+  saveTerm("depp");
+  assert.notEqual(
+    filterChatText("depp", { disabledPhrases: [...disabledTerms] }),
+    "depp",
+  );
+  removeTerm("Mondprobe");
 });

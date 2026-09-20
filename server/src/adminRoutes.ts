@@ -7,7 +7,8 @@ import {
   requestContext,
 } from "./adminAuth";
 import {
-  approvedTerms,
+  filterTerms,
+  saveTerm,
   listReports,
   removeTerm,
   reviewReport,
@@ -92,7 +93,7 @@ adminRoutes.post("/logout", (_req, res) => {
 adminRoutes.get("/overview", (_req, res) =>
   res.json({
     reports: listReports(),
-    terms: [...approvedTerms].sort(),
+    terms: filterTerms(),
     rooms: [...activeRooms.values()].map((r) => r.adminOverview()),
   }),
 );
@@ -104,6 +105,11 @@ adminRoutes.post("/reports/:id", (req, res) => {
   reviewReport(String(req.params.id), req.body.action === "accept");
   for (const room of activeRooms.values()) room.refreshFilter();
   res.json({ ok: true });
+});
+adminRoutes.post("/terms/save", (req, res) => {
+  saveTerm(String(req.body?.term || ""), String(req.body?.previous || ""));
+  for (const room of activeRooms.values()) room.refreshFilter();
+  res.json({ok:true});
 });
 adminRoutes.post("/terms/remove", (req, res) => {
   removeTerm(String(req.body?.term || ""));

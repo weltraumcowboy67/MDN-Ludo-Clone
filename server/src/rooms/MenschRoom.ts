@@ -1,7 +1,7 @@
-import { saveGame, takeRestore } from "../persistence";
+import { deleteGame, saveGame, takeRestore } from "../persistence";
 import { socketAdminSession, validAdminSession } from "../adminAuth";
 import { activeRooms } from "../roomRegistry";
-import { approvedTerms, submitReport } from "../moderation";
+import { approvedTerms, disabledTerms, submitReport } from "../moderation";
 import { randomInt, randomUUID } from "node:crypto";
 import type { AuthContext, Client } from "@colyseus/core";
 import { Room } from "@colyseus/core";
@@ -33,6 +33,7 @@ import { MenschState, schemaToSnapshot, snapshotToSchema } from "../schema";
 
 interface JoinOptions {
   restoreKey?: string;
+  spectator?: boolean;
   name?: string;
   color?: PlayerColor;
   customColor?: string;
@@ -105,7 +106,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     if (restored) this.roomId = restored.snapshot.roomId;
     activeRooms.set(this.roomId, this);
     const gameMode = restored?.snapshot.gameMode || normalizeGameMode(options.gameMode);
-    this.maxClients = gameMode === "singleplayer" ? 1 : getMaxPlayersForMode(gameMode);
+    this.maxClients = getMaxPlayersForMode(gameMode) + 4; // Extra connections are reserved for authenticated admin observers.
     // Keep seats briefly when the last browser reloads or loses its connection.
     this.autoDispose = false;
     this.scheduleEmptyRoomDisposal();
@@ -197,6 +198,11 @@ export class MenschRoom extends Room<{ state: MenschState }> {
 
   onJoin(client: Client, options: JoinOptions): void {
     const snapshot = schemaToSnapshot(this.state);
+    if (options.spectator) {
+      if (!validAdminSession(client.auth?.adminSession)) throw new Error("Nur der lokale Admin darf zuschauen.");
+      this.clock.setTimeout(() => client.send("adminUnlocked", { message: "Partie als Admin geöffnet." }), 100);
+      return;
+    }
     const reconnectToken = cleanToken(options.reconnectToken);
     const clientIp = getClientIp(client);
 
@@ -225,6 +231,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
       throw new Error("Der Raum ist voll.");
     }
 
+    if (snapshot.gameMode === "singleplayer" && snapshot.players.some(p => !p.isBot)) throw new Error("Diese Einzelspielerpartie hat bereits einen Spieler.");
     const availableColors = getAvailableColors(snapshot.players, snapshot.gameMode);
     const requestedColor = isPlayerColorForMode(options.color, snapshot.gameMode) ? options.color : undefined;
     const requestedColorAvailable = Boolean(requestedColor && availableColors.includes(requestedColor));
@@ -245,7 +252,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
       id: client.sessionId,
       name: resolvedPlayerName,
       color,
-      customColor: cleanCustomColor(requestedColorAvailable ? options.customColor : COLOR_META[color].hex, COLOR_META[color].hex),
+      customColor: availableVisualColor(snapshot, cleanCustomColor(requestedColorAvailable ? options.customColor : COLOR_META[color].hex, COLOR_META[color].hex)),
       ready: false,
       connected: true,
       isBot: false,
@@ -286,7 +293,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
 
   onLeave(client: Client): void {
     if (this.shuttingDown) return;
-    if (this.clients.length === 0) this.scheduleEmptyRoomDisposal();
+
     if (this.kickedPlayerIds.delete(client.sessionId)) {
       return;
     }
@@ -316,6 +323,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     }
 
     this.transferHost(snapshot);
+    if (!snapshot.players.some(p => p.connected && !p.isBot)) this.scheduleEmptyRoomDisposal();
     if (!snapshot.players.some(p => p.connected && !p.isBot) && snapshot.status === "playing") {
       snapshot.status = "paused";
       this.clearTurnWindow(snapshot);
@@ -328,10 +336,17 @@ export class MenschRoom extends Room<{ state: MenschState }> {
   private scheduleEmptyRoomDisposal(): void {
     this.emptyRoomTimeout?.clear();
     this.emptyRoomTimeout = this.clock.setTimeout(() => {
-      if (this.clients.length !== 0) return;
-      if (this.state.status === "lobby") void this.disconnect();
-      else if (this.state.status === "playing") this.adminAction("pause");
+      if (this.state.players.some(p => p.connected && !p.isBot)) return;
+      this.deleteRoom();
     }, 60_000);
+  }
+
+  private deleteRoom(): void {
+    this.shuttingDown = true;
+    deleteGame(this.roomId);
+    activeRooms.delete(this.roomId);
+    for (const client of this.clients) client.send("kicked", { message: "Die verlassene Partie wurde gelöscht." });
+    void this.disconnect();
   }
 
   private transferHost(snapshot: GameStateSnapshot): void {
@@ -381,6 +396,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
 
   adminAction(action: string, playerId = ""): void {
     let snapshot = schemaToSnapshot(this.state);
+    if (action === "delete") { this.deleteRoom(); return; }
     if (action === "kick") {
       const player = snapshot.players.find(p=>p.id===playerId);
       if (!player) throw new Error("Spieler nicht gefunden.");
@@ -497,7 +513,11 @@ export class MenschRoom extends Room<{ state: MenschState }> {
       return;
     }
 
-    player.customColor = cleanCustomColor(rawCustomColor, COLOR_META[player.color].hex);
+    const color = cleanCustomColor(rawCustomColor, COLOR_META[player.color].hex);
+    const owner = snapshot.players.find(p => p.id !== player.id && p.customColor.toLowerCase() === color.toLowerCase());
+    if (owner && !owner.isBot) { this.sendError(client, "Diese Farbe nutzt bereits ein Mitspieler."); return; }
+    if (owner) owner.customColor = player.customColor;
+    player.customColor = color;
     player.ready = false;
     snapshot.lastEvent = `${player.name} hat die Spielerfarbe angepasst.`;
     snapshot.updatedAt = Date.now();
@@ -1192,7 +1212,7 @@ export class MenschRoom extends Room<{ state: MenschState }> {
         id: `bot-${color}`,
         name: playerName,
         color,
-        customColor: COLOR_META[color].hex,
+        customColor: availableVisualColor(snapshot, COLOR_META[color].hex),
         ready: true,
         connected: true,
         isBot: true,
@@ -1246,22 +1266,16 @@ export class MenschRoom extends Room<{ state: MenschState }> {
       return text;
     }
 
-    return filterChatText(text, { extraPhrases: [...this.reportedFilterTerms] });
+    return filterChatText(text, { extraPhrases: [...this.reportedFilterTerms], disabledPhrases: [...disabledTerms] });
   }
 
-  private getAdminPlayer(client: Client, snapshot: GameStateSnapshot): PlayerState | undefined {
-    const player = snapshot.players.find((entry) => entry.id === client.sessionId);
-    if (!player || player.isBot) {
-      this.sendError(client, "Spieler nicht gefunden.");
-      return undefined;
-    }
-
+  private getAdminPlayer(client: Client, snapshot: GameStateSnapshot): { id: string } | undefined {
     if (!validAdminSession(client.auth?.adminSession)) {
       this.sendError(client, "Admin-Menü nicht freigeschaltet.");
       return undefined;
     }
 
-    return player;
+    return { id: client.sessionId };
   }
 
   private getAdminTargetPlayer(client: Client, snapshot: GameStateSnapshot, targetPlayerId: string): PlayerState | undefined {
@@ -1376,6 +1390,13 @@ export class MenschRoom extends Room<{ state: MenschState }> {
     for (const piece of player.pieces) piece.position = -1;
     this.transferHost(snapshot);
     this.deleteTokenForPlayer(player.id);
+    if (!snapshot.players.some(p => p.connected && !p.isBot)) {
+      this.scheduleEmptyRoomDisposal();
+      if (snapshot.status === "playing") {
+        snapshot.status = "paused";
+        this.clearTurnWindow(snapshot);
+      }
+    }
 
     if (snapshot.status === "lobby") {
       this.removePlayerFromLobby(snapshot, player, reason);
@@ -1472,7 +1493,7 @@ function getStartBlocker(snapshot: GameStateSnapshot): string {
     return "Es gibt disconnected Spieler. Warte auf Rejoin oder entferne sie als Host.";
   }
 
-  if (waitingPlayers.length > 0) {
+  if (snapshot.gameMode !== "singleplayer" && waitingPlayers.length > 0) {
     return "Noch nicht alle Spieler sind bereit.";
   }
 
@@ -1523,7 +1544,7 @@ function cleanPlayerName(value?: string, reportedFilterTerms: ReadonlySet<string
     return "";
   }
 
-  const filteredName = filterChatText(name, { extraPhrases: [...RESERVED_PLAYER_NAMES, ...reportedFilterTerms] });
+  const filteredName = filterChatText(name, { extraPhrases: [...RESERVED_PLAYER_NAMES, ...reportedFilterTerms], disabledPhrases: [...disabledTerms] });
   return filteredName === name ? name : "";
 }
 
@@ -1595,4 +1616,11 @@ function normalizeGameMode(value: unknown): GameMode {
 function normalizePresetColor(value: unknown): string {
   const color = String(value || "").trim().toLowerCase();
   return Object.values(COLOR_META).some((entry) => entry.hex.toLowerCase() === color) ? color : "";
+}
+
+/** Visual colors are independent of the four/eight logical board seats. */
+function availableVisualColor(snapshot: GameStateSnapshot, preferred: string): string {
+  const used = new Set(snapshot.players.map(p => p.customColor.toLowerCase()));
+  if (!used.has(preferred.toLowerCase())) return preferred;
+  return PLAYER_COLORS.map(color => COLOR_META[color].hex).find(hex => !used.has(hex.toLowerCase())) || preferred;
 }

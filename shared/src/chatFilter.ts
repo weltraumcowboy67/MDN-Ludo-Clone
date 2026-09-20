@@ -5,6 +5,7 @@ export interface ChatFilterRule {
 
 export interface ChatFilterOptions {
   extraPhrases?: readonly string[];
+  disabledPhrases?: readonly string[];
 }
 
 // Neue Chatfilter-Regeln hier ergänzen.
@@ -22,8 +23,8 @@ export const CHAT_FILTER_RULES: ChatFilterRule[] = [
   { label: "wichser", pattern: /w[\W_]*i[\W_]*c[\W_]*h[\W_]*s[\W_]*e[\W_]*r/giu },
   { label: "fuck", pattern: /f[\W_]*[uüv][\W_]*c[\W_]*k/giu },
   { label: "shit", pattern: /s[\W_]*h[\W_]*[i1!|][\W_]*t/giu },
-  { label: "n-word-a", pattern: /n[\W_]*[i1!|][\W_]*[gq9][\W_]*[gq9][\W_]*a/giu },
-  { label: "n-word-er", pattern: /n[\W_]*[i1!|][\W_]*[gq9][\W_]*[gq9][\W_]*e[\W_]*r/giu },
+  { label: "nigga", pattern: /n[\W_]*[i1!|][\W_]*[gq9][\W_]*[gq9][\W_]*a/giu },
+  { label: "nigger", pattern: /n[\W_]*[i1!|][\W_]*[gq9][\W_]*[gq9][\W_]*e[\W_]*r/giu },
   { label: "neger", pattern: /n[\W_]*e[\W_]*g[\W_]*e[\W_]*r/giu },
 
   { label: "opfer", pattern: /o[\W_]*p[\W_]*f[\W_]*e[\W_]*r/giu },
@@ -91,7 +92,7 @@ const FILTER_CHAR_MAP: Record<string, string> = {
   "€": "e",
   "ß": "ss",
 };
-const NORMALIZED_CHAT_BLOCKLIST = [
+export const BUILTIN_CHAT_TERMS = [
   "arsch",
   "arschloch",
   "penis",
@@ -149,8 +150,7 @@ const NORMALIZED_CHAT_BLOCKLIST = [
   "retard",
   "verpissdich",
   "leckmich",
-].map(normalizePhraseForFilter);
-const NORMALIZED_CHAT_PATTERNS = buildRepeatedLetterPatterns(NORMALIZED_CHAT_BLOCKLIST);
+];
 
 interface FoldedSpan {
   start: number;
@@ -159,8 +159,11 @@ interface FoldedSpan {
 
 export function filterChatText(value: string, options: ChatFilterOptions = {}): string {
   const withoutInvisibleChars = value.replace(INVISIBLE_CHARS, "");
-  const regexFiltered = CHAT_FILTER_RULES.reduce((text, rule) => text.replace(rule.pattern, "***"), withoutInvisibleChars);
-  return maskNormalizedMatches(regexFiltered, options.extraPhrases || []);
+  const disabled = new Set((options.disabledPhrases || []).map(normalizePhraseForFilter));
+  const regexFiltered = CHAT_FILTER_RULES.filter(rule => !disabled.has(normalizePhraseForFilter(rule.label)))
+    .reduce((text, rule) => text.replace(rule.pattern, "***"), withoutInvisibleChars);
+  const builtins = BUILTIN_CHAT_TERMS.filter(term => !disabled.has(normalizePhraseForFilter(term)));
+  return maskNormalizedMatches(regexFiltered, [...builtins, ...(options.extraPhrases || [])]);
 }
 
 export function normalizeReportedFilterTerm(value: string): string {
@@ -197,7 +200,7 @@ function maskNormalizedMatches(value: string, extraPhrases: readonly string[]): 
 
   const ranges: FoldedSpan[] = [];
   const dynamicPatterns = buildRepeatedLetterPatterns(extraPhrases);
-  for (const pattern of [...NORMALIZED_CHAT_PATTERNS, ...dynamicPatterns]) {
+  for (const pattern of dynamicPatterns) {
     pattern.lastIndex = 0;
     let match = pattern.exec(folded.text);
     while (match) {
