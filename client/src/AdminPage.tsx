@@ -1,3 +1,4 @@
+import { FilterDialog, type FilterTerm } from "./FilterDialog";
 import { useEffect, useState } from "react";
 import { Shield, ArrowLeft, Eye, EyeOff } from "lucide-react";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -14,7 +15,7 @@ interface Overview {
     status: string;
     createdAt: number;
   }>;
-  terms: string[];
+  terms: FilterTerm[];
   rooms: Array<{
     roomId: string;
     status: string;
@@ -27,6 +28,7 @@ interface Overview {
   }>;
 }
 export function AdminPage() {
+  const [filterOpen, setFilterOpen] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [checking, setChecking] = useState(true);
   const [username, setUsername] = useState("");
@@ -74,7 +76,7 @@ export function AdminPage() {
     if (session) void load().catch((e) => setError(e.message));
   }, [session]);
   async function action(path: string, body: object) {
-    if (busy) return;
+    if (busy) return false;
     setBusy(true);
     setError("");
     setNotice("");
@@ -98,8 +100,10 @@ export function AdminPage() {
         setNotice("Änderung gespeichert.");
       }
       setConfirm(null);
+      return true;
     } catch (e) {
       setError((e as Error).message);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -189,7 +193,7 @@ export function AdminPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 aria-invalid={Boolean(error)}
-              aria-describedby={error ? "admin-error" : undefined}
+                aria-describedby={error ? "admin-error" : undefined}
               />
               <button
                 type="button"
@@ -317,34 +321,23 @@ export function AdminPage() {
                 )}
               </section>
               <section className="admin-section">
-                <h2>Freigegebene Filterbegriffe</h2>
-                <p>
-                  Diese zusätzlichen Begriffe gelten für alle Räume mit
-                  eingeschaltetem Filter.
-                </p>
-                <div className="filter-terms">
-                  {overview.terms.length ? (
-                    overview.terms.map((term) => (
-                      <button
-                        className="button-secondary"
-                        disabled={busy}
-                        key={term}
-                        onClick={() =>
-                          setConfirm({
-                            title: `„${term}“ aus dem Filter entfernen?`,
-                            path: "terms/remove",
-                            body: { term },
-                          })
-                        }
-                      >
-                        {term} · Entfernen
-                      </button>
-                    ))
-                  ) : (
-                    <p className="empty-state">
-                      Noch keine zusätzlichen Begriffe.
+                <div className="section-heading">
+                  <div>
+                    <h2>Chatfilter</h2>
+                    <p>
+                      {overview.terms.filter((t) => t.enabled).length} aktive
+                      Begriffe und Regeln.
                     </p>
-                  )}
+                  </div>
+                  <button
+                    className="button-secondary"
+                    onClick={() => {
+                      setError("");
+                      setFilterOpen(true);
+                    }}
+                  >
+                    Filterliste verwalten
+                  </button>
                 </div>
               </section>
               <section className="admin-section">
@@ -372,7 +365,7 @@ export function AdminPage() {
                         </span>
                       </div>
                       <div className="row-actions">
-                        <a href={`/?room=${encodeURIComponent(room.roomId)}`}>
+                        <a href={`/?watch=${encodeURIComponent(room.roomId)}`}>
                           Partie öffnen
                         </a>
                         {room.status === "playing" && (
@@ -387,18 +380,19 @@ export function AdminPage() {
                             Pausieren
                           </button>
                         )}
-                        {room.status === "paused" && (
-                          <button
-                            disabled={busy}
-                            onClick={() =>
-                              action(`rooms/${room.roomId}`, {
-                                action: "resume",
-                              })
-                            }
-                          >
-                            Fortsetzen
-                          </button>
-                        )}
+                        {room.status === "paused" &&
+                          room.players.some((p) => p.connected && !p.isBot) && (
+                            <button
+                              disabled={busy}
+                              onClick={() =>
+                                action(`rooms/${room.roomId}`, {
+                                  action: "resume",
+                                })
+                              }
+                            >
+                              Fortsetzen
+                            </button>
+                          )}
                         <button
                           className="button-secondary"
                           disabled={busy}
@@ -412,6 +406,19 @@ export function AdminPage() {
                           }
                         >
                           Zurücksetzen
+                        </button>
+                        <button
+                          className="button-secondary"
+                          disabled={busy}
+                          onClick={() =>
+                            setConfirm({
+                              title: `Raum ${room.roomId} endgültig löschen? Die Partie und der gespeicherte Spielstand werden entfernt.`,
+                              path: `rooms/${room.roomId}`,
+                              body: { action: "delete" },
+                            })
+                          }
+                        >
+                          Partie löschen
                         </button>
                       </div>
                       <ul>
@@ -449,11 +456,28 @@ export function AdminPage() {
           )}
         </>
       )}
+      {filterOpen && overview && (
+        <FilterDialog
+          terms={overview.terms}
+          busy={busy}
+          error={error}
+          onClose={() => setFilterOpen(false)}
+          onAction={action}
+        />
+      )}
       {confirm && (
         <ConfirmDialog
           title={confirm.title}
           error={error}
-          confirmLabel={confirm.path.startsWith("reports/") ? "Annehmen" : "action" in confirm.body && confirm.body.action === "reset" ? "Zurücksetzen" : "Entfernen"}
+          confirmLabel={
+            confirm.path.startsWith("reports/")
+              ? "Annehmen"
+              : "action" in confirm.body && confirm.body.action === "reset"
+                ? "Zurücksetzen"
+                : "action" in confirm.body && confirm.body.action === "delete"
+                  ? "Partie löschen"
+                  : "Entfernen"
+          }
           busy={busy}
           onCancel={() => setConfirm(null)}
           onConfirm={() => action(confirm.path, confirm.body)}

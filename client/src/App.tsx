@@ -4,7 +4,7 @@ import { Invitation } from "./Invitation";
 import { readInvitation } from "./invitations";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, Dispatch, FormEvent, MutableRefObject, SetStateAction } from "react";
-import { ArrowLeft, BookOpen, Dices, LogOut, Moon, Send, Settings, Shield, Sun, X } from "lucide-react";
+import { ArrowLeft, BookOpen, Dice5, Dices, LogOut, Moon, Send, Settings, Shield, Sun, X } from "lucide-react";
 import {
   COLOR_META,
   DEFAULT_TURN_TIME_LIMIT_MS,
@@ -25,6 +25,7 @@ import { getPieceAssetForColor, useTintedPieceAssets } from "./pieceTint";
 type GameRoom = Room<unknown, GameStateSnapshot>;
 
 const DEFAULT_NAME = "Spieler";
+const ACTIVE_ROOM_KEY = "mensch:active-room";
 const LAST_ROOM_KEY = "mensch:last-room";
 const THEME_STORAGE_KEY = "mensch:theme";
 const PLAYER_PREFS_STORAGE_KEY = "mensch:player-prefs:v2";
@@ -145,11 +146,6 @@ interface PlayerPreferences {
 
 type PlayerPreferencesSetter = Dispatch<SetStateAction<PlayerPreferences>>;
 
-interface DiceRollStats {
-  counts: Record<number, number>;
-  total: number;
-}
-
 const DEFAULT_PLAYER_PREFERENCES: PlayerPreferences = {
   dragToMove: false,
   musicEnabled: false,
@@ -161,6 +157,8 @@ const DEFAULT_PLAYER_PREFERENCES: PlayerPreferences = {
 
 export function App() {
   const clientRef = useRef<Client | null>(null);
+  const currentRoomRef = useRef<GameRoom | null>(null);
+  const autoJoinStarted = useRef(false);
   const moveTimeoutRef = useRef<number | null>(null);
   const moveAnimationTimeoutRef = useRef<number | null>(null);
   const stepSoundTimeoutsRef = useRef<number[]>([]);
@@ -184,15 +182,13 @@ export function App() {
   const [savedRoom, setSavedRoom] = useState<SavedRoomSession | null>(() => getSavedRoomSession());
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getSavedThemeMode());
   const [playerPreferences, setPlayerPreferences] = useState<PlayerPreferences>(() => getSavedPlayerPreferences());
-  const [selectedGameId, setSelectedGameId] = useState<PortalGameId | null>(() => readInvitation(location.search) ? PORTAL_GAMES[0].id : null);
+  const [selectedGameId, setSelectedGameId] = useState<PortalGameId | null>(() => getAutoJoinTarget().id ? PORTAL_GAMES[0].id : null);
   const [createModeOpen, setCreateModeOpen] = useState(false);
   const [adminUnlocked, setAdminUnlocked] = useState(false);
   const [adminTargetPlayerId, setAdminTargetPlayerId] = useState("");
   const [cookieConsentAccepted, setCookieConsentAccepted] = useState(() => hasCookieConsent());
-  const [now, setNow] = useState(() => Date.now());
   const [moveAnimation, setMoveAnimation] = useState<PieceMoveAnimation | null>(null);
   const [captureMarkers, setCaptureMarkers] = useState<CaptureMarker[]>([]);
-  const [diceRollStats, setDiceRollStats] = useState<DiceRollStats>(() => createEmptyDiceRollStats());
   const previousStateRef = useRef<GameStateSnapshot | null>(null);
   useTintedPieceAssets(state?.players ?? EMPTY_PLAYERS);
 
@@ -246,6 +242,13 @@ export function App() {
   };
 
   useEffect(() => {
+    if (autoJoinStarted.current) return;
+    autoJoinStarted.current = true;
+    const target = getAutoJoinTarget();
+    if (target.id) void joinRoomByCode(target.id, target.spectator);
+  }, []);
+
+  useEffect(() => {
     document.documentElement.dataset.theme = themeMode;
     localStorage.setItem(THEME_STORAGE_KEY, themeMode);
   }, [themeMode]);
@@ -259,17 +262,13 @@ export function App() {
     const previousState = previousStateRef.current;
     const confirmedMoveAnimation = previousState ? getConfirmedMoveAnimation(previousState, state) : null;
     const confirmedCaptureMarkers = previousState ? getConfirmedCaptureMarkers(previousState, state) : [];
-    const confirmedRoll = previousState ? getConfirmedDiceRoll(previousState, state) : null;
     if (confirmedMoveAnimation) {
       startConfirmedMoveAnimation(confirmedMoveAnimation, playerPreferences);
     }
     if (confirmedCaptureMarkers.length > 0) {
       showCaptureMarkers(confirmedCaptureMarkers);
     }
-    if (confirmedRoll && confirmedRoll.playerId === room?.sessionId) {
-      const rolledValue = confirmedRoll.value;
-      setDiceRollStats((current) => addDiceRoll(current, rolledValue));
-    }
+
 
     playConfirmedStateSounds(previousState, state, room?.sessionId || "", playerPreferences);
     previousStateRef.current = state;
@@ -278,19 +277,6 @@ export function App() {
   useEffect(() => {
     localStorage.setItem(PLAYER_PREFS_STORAGE_KEY, JSON.stringify(playerPreferences));
   }, [playerPreferences]);
-
-  useEffect(() => {
-    if (!state || state.status !== "playing") {
-      return;
-    }
-
-    const intervalId = window.setInterval(() => setNow(Date.now()), 250);
-    return () => window.clearInterval(intervalId);
-  }, [state?.status]);
-
-  useEffect(() => {
-    setNow(Date.now());
-  }, [state?.turnDeadlineAt, state?.turnStartedAt]);
 
   useEffect(() => {
     return () => {
@@ -353,7 +339,7 @@ export function App() {
     }
   }
 
-  async function joinRoomByCode(codeOverride?: string) {
+  async function joinRoomByCode(codeOverride?: string, spectator = false) {
     const code = (codeOverride || joinCode).trim();
     if (!code) {
       setToastTone("error");
@@ -368,11 +354,13 @@ export function App() {
         name: playerName,
         color: selectedColor,
         customColor: COLOR_META[selectedColor].hex,
-        reconnectToken: getReconnectToken(code),
+        reconnectToken: spectator ? "" : getReconnectToken(code),
+        spectator,
       });
-      attachRoom(joinedRoom);
+      attachRoom(joinedRoom, spectator);
       playSound("confirm");
     } catch (error) {
+      sessionStorage.removeItem(ACTIVE_ROOM_KEY);
       const message = getErrorMessage(error);
       if (codeOverride && shouldForgetSavedRoom(message)) {
         clearRoomSession(code);
@@ -385,15 +373,19 @@ export function App() {
     }
   }
 
-  function attachRoom(joinedRoom: GameRoom) {
-    room?.leave();
+  function attachRoom(joinedRoom: GameRoom, spectator = false) {
+    history.replaceState(null, "", `/?${spectator ? "watch" : "room"}=${encodeURIComponent(joinedRoom.roomId)}`);
+    const previousRoom = currentRoomRef.current;
+    currentRoomRef.current = joinedRoom;
+    previousRoom?.leave();
+    sessionStorage.setItem(ACTIVE_ROOM_KEY, joinedRoom.roomId);
+    setSelectedGameId(PORTAL_GAMES[0].id);
     joinedRoom.reconnection.enabled = false;
     setRoom(joinedRoom);
     setJoinCode(joinedRoom.roomId);
     setSelectedPieceId("");
     setChatReportTarget(null);
     setChatReportWord("");
-    setDiceRollStats(createEmptyDiceRollStats());
     setAdminUnlocked(false);
     setAdminTargetPlayerId(joinedRoom.sessionId);
     setState(normalizeState(joinedRoom.state));
@@ -440,6 +432,8 @@ export function App() {
       playSound("error");
     });
     joinedRoom.onLeave((code) => {
+      if (currentRoomRef.current !== joinedRoom) return;
+      currentRoomRef.current = null;
       if (code !== 4000 && code !== 4001) {
         setToastTone("error");
         setErrorMessage("Verbindung getrennt. Du kannst deinen letzten Raum wieder betreten, solange er noch besteht.");
@@ -454,8 +448,7 @@ export function App() {
       setSelectedPieceId("");
       setChatReportTarget(null);
       setChatReportWord("");
-      setDiceRollStats(createEmptyDiceRollStats());
-      setAdminUnlocked(false);
+        setAdminUnlocked(false);
       setAdminTargetPlayerId("");
     });
   }
@@ -483,7 +476,7 @@ export function App() {
   }
 
   function sendVisualColor(color: PlayerColor) {
-    room?.send("setPlayerColor", { color, customColor: COLOR_META[color].hex });
+    room?.send("setCustomColor", { customColor: COLOR_META[color].hex });
   }
 
   function addBot() {
@@ -626,6 +619,9 @@ export function App() {
   }
 
   function leaveRoom() {
+    sessionStorage.removeItem(ACTIVE_ROOM_KEY);
+    history.replaceState(null, "", "/");
+    currentRoomRef.current = null;
     room?.leave();
     clearMoveAnimationTimers();
     clearCaptureMarkerTimers();
@@ -697,13 +693,7 @@ export function App() {
                   aria-label="Zufallsnamen würfeln"
                   title="Zufallsnamen würfeln"
                 >
-                  <span className="mini-dice" aria-hidden="true">
-                    <span />
-                    <span />
-                    <span />
-                    <span />
-                    <span />
-                  </span>
+                  <Dice5 size={24} aria-hidden="true" />
                 </button>
               </div>
             </label>
@@ -827,7 +817,6 @@ export function App() {
 
   return (
     <main className="app-shell">
-      <TurnTimerHud state={state} now={now} />
       <section className="top-bar">
         <div>
           <p className="eyebrow">{state.status === "paused" ? "Partie pausiert" : "Partie läuft"}</p>
@@ -872,11 +861,6 @@ export function App() {
             moveAnimation={moveAnimation}
             captureMarkers={captureMarkers}
           />
-          <TurnReminderPopup
-            state={state}
-            meId={room.sessionId}
-            canRoll={canRoll}
-          />
           <BoardActionDock
             state={state}
             meId={room.sessionId}
@@ -887,12 +871,6 @@ export function App() {
         </div>
 
         <aside className="side-panel">
-          <TurnBanner
-            state={state}
-            meId={room.sessionId}
-            canRoll={canRoll}
-            dragToMove={playerPreferences.dragToMove}
-          />
           <TurnPanel
             state={state}
             meId={room.sessionId}
@@ -901,20 +879,19 @@ export function App() {
             onRoll={rollDice}
             onRematch={requestRematch}
           />
-          <ChatPanel
+          {state.gameMode !== "singleplayer" && <ChatPanel
             state={state}
             chatText={chatText}
             onChatText={setChatText}
             onSendChat={sendChat}
             onReportMessage={openChatReport}
-          />
+          />}
         </aside>
       </section>
 
       <GameSettingsDock
         preferences={playerPreferences}
         onPreferencesChange={setPlayerPreferences}
-        diceRollStats={diceRollStats}
       />
       {adminUnlocked ? (
         <AdminDock
@@ -980,51 +957,7 @@ function PortalStage({ themeMode, onToggleTheme, onSelectGame }: PortalStageProp
         </div>
       </section>
 
-      <nav className="portal-categories" aria-label="Kategorien">
-        <span>Beliebt</span>
-        <span>Klassiker</span>
-        <span>Für Freunde</span>
-        <span>Demnächst</span>
-      </nav>
 
-      <section className="portal-section" aria-labelledby="portal-grid-title">
-        <div className="portal-section__head">
-          <div>
-            <p className="eyebrow">Brettspiele</p>
-            <h2 id="portal-grid-title">Auswahl</h2>
-          </div>
-          <p>{PORTAL_GAMES.length + PLACEHOLDER_GAMES.length} Spiele</p>
-        </div>
-
-        <div className="game-grid">
-          {PORTAL_GAMES.map((game) => (
-            <button key={game.id} type="button" className="game-tile game-tile--ready" onClick={() => onSelectGame(game)}>
-              <span className="game-tile__image">
-                <img src={game.image} alt="" />
-              </span>
-              <span className="game-tile__body">
-                <span className="game-tile__status">{game.status}</span>
-                <strong>{game.title}</strong>
-                <small>{game.players}</small>
-              </span>
-            </button>
-          ))}
-          {PLACEHOLDER_GAMES.map((game) => (
-            <article key={game.title} className="game-tile game-tile--placeholder" aria-label={`${game.title}: ${game.status}`}>
-              <span className="game-tile__placeholder-art" aria-hidden="true">
-                <span />
-                <span />
-                <span />
-              </span>
-              <span className="game-tile__body">
-                <span className="game-tile__status">{game.status}</span>
-                <strong>{game.title}</strong>
-                <small>{game.description}</small>
-              </span>
-            </article>
-          ))}
-        </div>
-      </section>
     </section>
   );
 }
@@ -1215,8 +1148,8 @@ function LobbyStage({
   const canAddBot = isHost && state.players.length < maxPlayers;
   const activePlayerCount = state.players.filter((player) => player.connected || player.isBot).length;
   const unavailableColors = state.players
-    .filter((player) => player.id !== meId)
-    .map((player) => player.color);
+    .filter((player) => player.id !== meId && !player.isBot)
+    .map((player) => getPlayerVisualColorPreset(player));
 
   return (
     <section className="lobby-stage">
@@ -1224,19 +1157,18 @@ function LobbyStage({
         <Board state={state} selectedPieceId="" onSelectPiece={() => undefined} disabled />
       </div>
       <div className="lobby-overlay">
-        <section className="lobby-window">
+        <section className={`lobby-window${state.gameMode === "singleplayer" ? " lobby-window--solo" : ""}`}>
           <div className="lobby-main">
             <div className="lobby-head">
               <div>
                 <p className="eyebrow">Lobby</p>
-                <h1>Warten auf Spieler</h1>
+                <h1>{state.gameMode === "singleplayer" ? "Deine Runde" : "Warten auf Spieler"}</h1>
               </div>
+              <ThemeToggle themeMode={themeMode} onToggle={onToggleTheme} />
               {state.gameMode !== "singleplayer" ? (
                 <Invitation roomId={state.roomId}/>
               ) : null}
             </div>
-            <ThemeToggle themeMode={themeMode} onToggle={onToggleTheme} />
-
             <p className="status-line">
               Host: {host?.name || "wartet"} {isHost ? "· du verwaltest die Lobby" : ""}
             </p>
@@ -1251,13 +1183,13 @@ function LobbyStage({
                 Zugzeit
               </span>
               <span>
-                <strong>{me?.ready ? "Bereit" : "Offen"}</strong>
-                Dein Status
+                <strong>{state.gameMode === "singleplayer" ? "Solo" : me?.ready ? "Bereit" : "Offen"}</strong>
+                {state.gameMode === "singleplayer" ? "Spielmodus" : "Dein Status"}
               </span>
             </div>
 
             <div className="lobby-settings">
-              <label className="checkbox-row">
+              {state.gameMode !== "singleplayer" && <label className="checkbox-row">
                 <input
                   type="checkbox"
                   checked={state.settings.chatFilterEnabled}
@@ -1265,7 +1197,7 @@ function LobbyStage({
                   onChange={(event) => onChatFilter(event.target.checked)}
                 />
                 Chat-Filter
-              </label>
+              </label>}
               <label>
                 Zugzeit
                 <select
@@ -1310,7 +1242,7 @@ function LobbyStage({
             />
 
             <div className="lobby-actions">
-              <button type="button" onClick={onReady}>{me?.ready ? "Bereit zurücknehmen" : "Bereit"}</button>
+              {state.gameMode !== "singleplayer" && <button type="button" onClick={onReady}>{me?.ready ? "Bereit zurücknehmen" : "Bereit"}</button>}
               <button type="button" className="button-secondary" disabled={!canAddBot} onClick={onAddBot}>
                 Computer hinzufügen
               </button>
@@ -1330,13 +1262,13 @@ function LobbyStage({
             <p className="status-line">{startBlocker || state.lastEvent}</p>
           </div>
 
-          <ChatPanel
+          {state.gameMode !== "singleplayer" && <ChatPanel
             state={state}
             chatText={chatText}
             onChatText={onChatText}
             onSendChat={onSendChat}
             onReportMessage={onReportChatMessage}
-          />
+          />}
         </section>
       </div>
       {me && colorPickerOpen ? (
@@ -1394,7 +1326,7 @@ function TurnPanel({ state, meId, canRoll, dragToMove, onRoll, onRematch }: Turn
 
   return (
     <section className="panel-block turn-panel" style={turnStyle}>
-      <p className="eyebrow">Am Zug</p>
+      <p className="eyebrow">{state.status === "paused" ? "Pausiert" : isMyTurn ? "Dein Zug" : "Am Zug"}</p>
       <h2>{activePlayer?.name || "Warten"}</h2>
       <div className="dice-row">
         <DiceFace value={state.diceValue} active={state.diceRolled} />
@@ -1406,13 +1338,9 @@ function TurnPanel({ state, meId, canRoll, dragToMove, onRoll, onRematch }: Turn
           <span>{state.diceRolled ? `Gewürfelt: ${state.diceValue}` : "Würfel bereit"}</span>
         </div>
       </div>
-      <p className="status-line">{state.lastEvent}</p>
-      {isMyTurn && state.legalMoves.length > 0 ? (
-        <div className="move-box">
-          <p>{state.diceValue === 6 ? sixMoveHint : moveHint}</p>
-        </div>
-      ) : null}
-      {activePlayer?.isBot ? <p className="status-line">Der Computer denkt.</p> : null}
+      <p className="turn-hint" role="status">{state.status === "paused" ? "Die Partie wartet auf Fortsetzung." : isMyTurn ? (state.legalMoves.length ? (state.diceValue === 6 ? sixMoveHint : moveHint) : "Du kannst würfeln.") : `${activePlayer?.name || "Mitspieler"} spielt gerade.`}</p>
+
+
     </section>
   );
 }
@@ -1510,146 +1438,14 @@ function DiceFace({ value, active }: { value: number; active: boolean }) {
   );
 }
 
-function TurnBanner({
-  state,
-  meId,
-  canRoll,
-  dragToMove,
-}: {
-  state: GameStateSnapshot;
-  meId: string;
-  canRoll: boolean;
-  dragToMove: boolean;
-}) {
-  const activePlayer = state.players[state.currentPlayerIndex];
-  if (state.status !== "playing" || activePlayer?.id !== meId) {
-    return null;
-  }
-  const actionText = canRoll ? "Jetzt würfeln" : dragToMove ? "Figur ziehen" : "Figur anklicken";
-  const style = {
-    "--turn-color": getPlayerVisualColor(activePlayer),
-    "--turn-soft": getPlayerSoftColor(activePlayer),
-  } as CSSProperties;
-
-  return (
-    <div className="turn-banner" style={style}>
-      <strong>Du bist am Zug</strong>
-      <span>{actionText}</span>
-    </div>
-  );
-}
-
-function TurnReminderPopup({
-  state,
-  meId,
-  canRoll,
-}: {
-  state: GameStateSnapshot;
-  meId: string;
-  canRoll: boolean;
-}) {
-  const activePlayer = state.players[state.currentPlayerIndex];
-  const activePlayerId = activePlayer?.id || "";
-  const isMyTurn = state.status === "playing" && activePlayer?.id === meId;
-  const previousActivePlayerIdRef = useRef("");
-  const [visible, setVisible] = useState(false);
-
-  useEffect(() => {
-    const activePlayerChanged = previousActivePlayerIdRef.current !== activePlayerId;
-    previousActivePlayerIdRef.current = activePlayerId;
-
-    if (!isMyTurn || state.diceRolled || !canRoll) {
-      setVisible(false);
-      return;
-    }
-
-    if (!activePlayerChanged) {
-      return;
-    }
-
-    setVisible(true);
-    const timeoutId = window.setTimeout(() => setVisible(false), 1750);
-    return () => window.clearTimeout(timeoutId);
-  }, [activePlayerId, canRoll, isMyTurn, state.diceRolled]);
-
-  if (!isMyTurn || !visible || !activePlayer || !canRoll) {
-    return null;
-  }
-
-  const turnColor = getPlayerVisualColor(activePlayer);
-  const turnSoft = getPlayerSoftColor(activePlayer);
-  const actionText = "Würfel jetzt.";
-  const style = {
-    "--turn-color": turnColor,
-    "--turn-soft": turnSoft,
-  } as CSSProperties;
-
-  return (
-    <div className="turn-reminder" style={style} role="status" aria-live="assertive">
-      <button
-        className="turn-reminder__close"
-        type="button"
-        onClick={() => setVisible(false)}
-        aria-label="Zug-Erinnerung schließen"
-      >
-        <X className="icon-svg" />
-      </button>
-      <div className="turn-reminder__art" aria-hidden="true">
-        <img src={getPieceAssetForPlayer(activePlayer)} alt="" />
-      </div>
-      <div>
-        <p className="eyebrow">Du bist am Zug</p>
-        <h2 style={{ color: turnColor }}>{activePlayer.name}</h2>
-        <p>{actionText}</p>
-      </div>
-    </div>
-  );
-}
-
-function TurnTimerHud({ state, now }: { state: GameStateSnapshot; now: number }) {
-  const activePlayer = state.players[state.currentPlayerIndex];
-  if (
-    state.status !== "playing" ||
-    !activePlayer ||
-    !state.turnStartedAt ||
-    !state.turnDeadlineAt
-  ) {
-    return null;
-  }
-
-  const duration = Math.max(1, state.turnDeadlineAt - state.turnStartedAt);
-  const elapsed = Math.min(duration, Math.max(0, now - state.turnStartedAt));
-  const remainingMs = Math.max(0, state.turnDeadlineAt - now);
-  const progress = elapsed / duration;
-  const seconds = Math.ceil(remainingMs / 1000);
-  const turnColor = getPlayerVisualColor(activePlayer);
-  const turnSoft = getPlayerSoftColor(activePlayer);
-  const style = {
-    "--turn-color": turnColor,
-    "--turn-soft": turnSoft,
-  } as CSSProperties;
-
-  return (
-    <div className="turn-timer-bar" style={style} aria-label={`Zugzeit ${seconds} Sekunden`}>
-      <div className="turn-timer-bar__fill" style={{ width: `${progress * 100}%` }} />
-      <span>
-        {activePlayer.name} · {seconds}s
-      </span>
-    </div>
-  );
-}
-
 function GameSettingsDock({
   preferences,
   onPreferencesChange,
-  diceRollStats,
 }: {
   preferences: PlayerPreferences;
   onPreferencesChange: PlayerPreferencesSetter;
-  diceRollStats: DiceRollStats;
 }) {
   const [open, setOpen] = useState(false);
-  const diceOdds = useMemo(() => getPersonalDiceOdds(diceRollStats), [diceRollStats]);
   const updatePreference = (patch: Partial<PlayerPreferences>) => {
     onPreferencesChange((current) => ({ ...current, ...patch }));
   };
@@ -1666,24 +1462,8 @@ function GameSettingsDock({
         <Settings className="icon-svg" />
       </button>
       {open ? (
-        <section className="settings-dock__panel" aria-label="Spieler-Einstellungen">
-          <div>
-            <p className="eyebrow">Würfel-Chancen</p>
-            <p className="dice-odds-note">
-              {diceRollStats.total > 0
-                ? `Deine bisherigen Würfe: ${diceRollStats.total}`
-                : "Noch keine eigenen Würfe in diesem Raum."}
-            </p>
-            <div className="dice-odds-grid">
-                {diceOdds.map((entry) => (
-                  <span key={entry.value}>
-                    <strong>{entry.value}</strong>
-                    {entry.chance}
-                    <small>{entry.percent}</small>
-                  </span>
-                ))}
-            </div>
-          </div>
+        <Modal label="Spieler-Einstellungen" onClose={()=>setOpen(false)}><section className="settings-panel"><div className="dialog-head"><h2>Einstellungen</h2><button className="button-secondary" onClick={()=>setOpen(false)}>Schließen</button></div>
+          <div className="dice-explanation"><h2>Würfel</h2><p>Im normalen Spiel hat jede Zahl bei jedem Wurf dieselbe Chance: 1 von 6 (ca. 16,7 %). Frühere Würfe ändern daran nichts.</p><p>Gezielte Admin-Eingriffe sind davon ausgenommen.</p></div>
 
           <label className="checkbox-row">
             <input
@@ -1693,7 +1473,7 @@ function GameSettingsDock({
             />
             Figuren per Drag & Drop ziehen
           </label>
-        </section>
+        </section></Modal>
       ) : null}
     </div>
   );
@@ -1762,11 +1542,11 @@ function AdminDock({
         <Shield className="icon-svg" />
       </button>
       {open ? (
-        <section className="admin-dock__panel" aria-label="Admin-Menü">
+        <Modal label="Admin-Menü" onClose={()=>setOpen(false)}><section className="admin-controls"><button className="button-secondary" onClick={()=>setOpen(false)}>Schließen</button>
           <div className="admin-dock__head">
             <div>
               <p className="eyebrow">Admin</p>
-              <h2>Cheats</h2>
+              <h2>Spielsteuerung</h2>
             </div>
             <span>{targetPlayer ? `Ziel: ${targetPlayer.name}` : "Kein Ziel"}</span>
           </div>
@@ -1846,7 +1626,7 @@ function AdminDock({
               ))}
             </div>
           </div>
-        </section>
+        </section></Modal>
       ) : null}
     </div>
   );
@@ -2223,7 +2003,7 @@ function PlayersPanel({
                 {player.id === meId ? " (du)" : ""}
                 {player.id === hostId ? " · Host" : ""}
               </span>
-              <small>{getPlayerStatus(player.ready, player.connected, player.isBot, active)}</small>
+              <small>{state.gameMode === "singleplayer" && state.status === "lobby" && !player.isBot ? "Spieler" : getPlayerStatus(player.ready, player.connected, player.isBot, active)}</small>
               {canKick ? (
                 <button
                   className="tiny-button"
@@ -2275,7 +2055,7 @@ function ChatPanel({ state, chatText, onChatText, onSendChat, onReportMessage }:
 
   return (
     <section className="panel-block chat-panel">
-      <button className="chat-disclosure button-secondary" type="button" aria-expanded={chatOpen} onClick={()=>setChatOpen(!chatOpen)}>Chat · {state.chat.filter(m=>m.color!=="system").length} Nachrichten <span>{chatOpen?"−":"+"}</span></button>
+      <button className="chat-disclosure button-secondary" type="button" aria-expanded={chatOpen} onClick={()=>setChatOpen(!chatOpen)}>Chat <span>{chatOpen?"−":"+"}</span></button>
       <div className="chat-content" hidden={!chatOpen}>
       <div className="chat-log" aria-live="polite" ref={chatLogRef}>
         {state.chat.length === 0 ? <p className="empty-chat">Noch keine Nachrichten.</p> : null}
@@ -2602,53 +2382,6 @@ function getMoveStepCount(from: number, to: number): number {
 }
 
 
-function createEmptyDiceRollStats(): DiceRollStats {
-  return {
-    counts: Object.fromEntries(DICE_VALUES.map((value) => [value, 0])),
-    total: 0,
-  };
-}
-
-function addDiceRoll(stats: DiceRollStats, value: number): DiceRollStats {
-  if (!DICE_VALUES.includes(value as typeof DICE_VALUES[number])) {
-    return stats;
-  }
-
-  return {
-    counts: {
-      ...stats.counts,
-      [value]: (stats.counts[value] || 0) + 1,
-    },
-    total: stats.total + 1,
-  };
-}
-
-function getPersonalDiceOdds(stats: DiceRollStats) {
-  return DICE_VALUES.map((value) => {
-    const count = stats.counts[value] || 0;
-    if (stats.total <= 0) {
-      return {
-        value,
-        chance: "1/6",
-        percent: "16,67%",
-      };
-    }
-
-    return {
-      value,
-      chance: `${count}/${stats.total}`,
-      percent: `${formatPercent((count / stats.total) * 100)}%`,
-    };
-  });
-}
-
-function formatPercent(value: number): string {
-  return value.toLocaleString("de-DE", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 1,
-  });
-}
-
 function getPlayerVisualColor(player: PlayerState): string {
   return normalizeHexColor(player.customColor, COLOR_META[player.color].hex);
 }
@@ -2737,7 +2470,7 @@ function getStartBlocker(state: GameStateSnapshot): string {
     return "Warte auf disconnected Spieler oder entferne sie als Host.";
   }
 
-  if (waitingPlayers.length > 0) {
+  if (state.gameMode !== "singleplayer" && waitingPlayers.length > 0) {
     return "Noch nicht alle Spieler sind bereit.";
   }
 
@@ -2853,6 +2586,13 @@ function getSavedPlayerPreferences(): PlayerPreferences {
   } catch {
     return DEFAULT_PLAYER_PREFERENCES;
   }
+}
+
+function getAutoJoinTarget(): { id: string; spectator: boolean } {
+  const params = new URLSearchParams(location.search);
+  const watch = params.get("watch");
+  const id = watch || readInvitation(location.search) || sessionStorage.getItem(ACTIVE_ROOM_KEY) || "";
+  return { id: /^[A-Za-z0-9_-]{1,64}$/.test(id) ? id : "", spectator: Boolean(watch) };
 }
 
 function getRoomStorageKey(roomId: string): string {

@@ -19,21 +19,21 @@
   background: var(--canvas);
 }
 :root[data-theme="dark"] {
-  --canvas: #17221f;
-  --surface: #22312b;
-  --surface-soft: #2b3d34;
-  --ink: #f1f1e7;
-  --muted: #bdcabe;
-  --line: #506358;
-  --accent: #bdd7ad;
-  --on-accent: #182c1d;
-  --hover: #d0e8c1;
+  --canvas: #15161a;
+  --surface: #202126;
+  --surface-soft: #2b2d34;
+  --ink: #f2f3f5;
+  --muted: #b8bbc5;
+  --line: #454853;
+  --accent: #b8c8ff;
+  --on-accent: #192340;
+  --hover: #d0dbff;
   --focus: #9fcaff;
   --danger: #ffb0a8;
   --shadow: 0 14px 42px #0003;
-  --scroll-thumb: #728a79;
-  --scroll-track: #22312b;
-  --scroll-hover: #a1b7a8;
+  --scroll-thumb: #717580;
+  --scroll-track: #202126;
+  --scroll-hover: #a7adbb;
 }
 body,
 :root[data-theme="dark"] body {
@@ -69,13 +69,16 @@ a {
   color: var(--accent);
   text-underline-offset: 4px;
 }
-button {
+button,
+:root[data-theme="dark"] button {
   background: var(--accent);
   color: var(--on-accent);
   border-radius: 7px;
 }
-button:hover:not(:disabled) {
+button:hover:not(:disabled),
+:root[data-theme="dark"] button:hover:not(:disabled) {
   background: var(--hover);
+  color: var(--on-accent);
 }
 button:disabled {
   opacity: 0.55;
@@ -361,10 +364,9 @@ textarea {
   flex-wrap: wrap;
 }
 .game-layout {
-  grid-template-columns: minmax(140px, 200px) minmax(
-      0,
-      calc(100svh - 130px)
-    ) minmax(220px, 290px);
+  grid-template-columns:
+    minmax(140px, 200px) minmax(0, calc(100svh - 130px))
+    minmax(220px, 290px);
   gap: 1.2rem;
 }
 .playfield {
@@ -872,18 +874,400 @@ textarea {
   }
 }
 /* Keep turn guidance beside the board, where it cannot cover a move target. */
-.turn-reminder { display: none; }
+.turn-reminder {
+  display: none;
+}
 @media (min-width: 1101px) {
-  .game-layout { grid-template-columns: minmax(170px,240px) minmax(0,calc(100svh - 130px)) minmax(220px,290px); }
+  .game-layout {
+    grid-template-columns: minmax(170px, 240px) minmax(
+        0,
+        calc(100svh - 130px)
+      ) minmax(220px, 290px);
+  }
 }
 @media (max-width: 760px) {
-  .players-rail { order: -1; }
-  .playfield { order: 0; }
-  .side-panel { order: 1; }
-  .top-actions { display: flex; flex-wrap: wrap; gap: .25rem; }
-  .top-actions > *, .top-actions button { width: auto; min-width: 0; }
-  .top-actions .invitation { display: contents; }
-  .top-actions .invitation > span:not(.sr-only) { display: none; }
-  .top-actions .invitation > label { width: 100%; }
-  .top-actions button { flex: 1; padding: .35rem; }
+  .players-rail {
+    order: -1;
+  }
+  .playfield {
+    order: 0;
+  }
+  .side-panel {
+    order: 1;
+  }
+  .top-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+  .top-actions > *,
+  .top-actions button {
+    width: auto;
+    min-width: 0;
+  }
+  .top-actions .invitation {
+    display: contents;
+  }
+  .top-actions .invitation > span:not(.sr-only) {
+    display: none;
+  }
+  .top-actions .invitation > label {
+    width: 100%;
+  }
+  .top-actions button {
+    flex: 1;
+    padding: 0.35rem;
+  }
+}
+/* Live-feedback revision: neutral night mode, stable controls and straight artwork. */
+.portal-stage {
+  min-height: 0;
+  height: calc(100svh - 3.6rem);
+  max-height: 860px;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: stretch;
+}
+.portal-feature {
+  min-height: 0;
+}
+.portal-feature__media,
+:root[data-theme="dark"] .portal-feature__media {
+  background: var(--surface-soft);
+  min-height: 0;
+}
+.portal-feature__media img:first-child,
+.entry-visual > img {
+  transform: none;
+  animation: none;
+  box-shadow: none;
+  border-radius: 12px;
+  max-height: 100%;
+  object-fit: contain;
+}
+.portal-feature__media img:first-child {
+  width: min(85%, 430px);
+}
+.portal-piece-row,
+.entry-piece-cloud {
+  display: none;
+}
+.entry-visual {
+  padding: 1.5rem;
+}
+.entry-visual > img {
+  width: 100%;
+}
+.lobby-window--solo {
+  grid-template-columns: 1fr;
+  max-width: 800px;
+  margin: auto;
+}
+.lobby-window--solo .lobby-main {
+  gap: 0.8rem;
+}
+.lobby-window--solo .lobby-status-strip {
+  margin: 0;
+}
+.lobby-window--solo .player-row {
+  padding: 0.55rem 0.4rem;
+}
+.lobby-board-backdrop {
+  display: none;
+}
+.lobby-stage {
+  padding-block: 1.25rem;
+}
+.name-random-button,
+:root[data-theme="dark"] .name-random-button {
+  display: grid;
+  place-items: center;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  box-shadow: none;
+}
+.name-random-button:hover:not(:disabled) {
+  background: var(--surface-soft);
+}
+.dice-face,
+:root[data-theme="dark"] .dice-face {
+  background: var(--surface);
+  color: var(--ink);
+  border: 2px solid var(--line);
+  border-radius: 12px;
+  box-shadow: none;
+  transform: none;
+}
+.dice-face::before,
+.dice-face::after {
+  display: none;
+}
+.dice-pip,
+:root[data-theme="dark"] .dice-pip {
+  background: transparent;
+  box-shadow: none;
+}
+.dice-pip--visible,
+:root[data-theme="dark"] .dice-pip--visible {
+  background: var(--ink);
+}
+.dice-face--active,
+:root[data-theme="dark"] .dice-face--active {
+  border-color: var(--accent);
+}
+.dice-placeholder {
+  color: var(--muted);
+}
+.side-panel .turn-panel {
+  height: 240px;
+  min-height: 240px;
+  display: grid;
+  grid-template-rows: 20px 32px 88px 52px;
+  gap: 0.3rem;
+  align-content: start;
+}
+.turn-panel h2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.turn-hint {
+  min-height: 3em;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.turn-panel .dice-actions button {
+  width: 100%;
+  min-width: 120px;
+}
+.side-panel .chat-panel {
+  align-self: stretch;
+}
+.settings-panel,
+.admin-controls,
+.filter-dialog {
+  padding: 1.5rem;
+  display: grid;
+  gap: 1rem;
+}
+.admin-controls .admin-section,
+:root[data-theme="dark"] .admin-controls .admin-section {
+  padding: 1rem 0 0;
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+.admin-controls button {
+  color: var(--ink);
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+}
+.admin-controls button:hover:not(:disabled) {
+  background: var(--surface);
+}
+.admin-controls .admin-player-row,
+:root[data-theme="dark"] .admin-controls .admin-player-row {
+  background: var(--surface-soft);
+  color: var(--ink);
+  border-color: var(--line);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+.admin-controls .admin-player-row--selected {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.dice-explanation {
+  display: grid;
+  gap: 0.6rem;
+  line-height: 1.5;
+}
+.filter-dialog > p {
+  color: var(--muted);
+}
+.filter-editor {
+  display: flex;
+  gap: 0.5rem;
+  align-items: end;
+  flex-wrap: wrap;
+}
+.filter-editor label {
+  flex: 1;
+  min-width: 180px;
+}
+.filter-list {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.filter-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--line);
+  padding: 0.75rem 0;
+}
+.filter-list small {
+  display: block;
+  color: var(--muted);
+  margin-top: 0.2rem;
+}
+.search-field {
+  display: flex;
+  gap: 0.5rem;
+}
+.search-field input {
+  min-width: 0;
+}
+@media (min-width: 761px) {
+  .app-shell:not(.entry-shell):not(.portal-shell):not(.app-shell--lobby) {
+    padding-bottom: 0.5rem;
+  }
+  .playfield {
+    max-width: calc(100svh - 120px);
+  }
+  .lobby-stage {
+    align-content: center;
+  }
+}
+@media (max-width: 760px) {
+  .portal-shell {
+    padding: 0.8rem;
+  }
+  .portal-stage {
+    height: calc(100svh - 1.6rem);
+  }
+  .portal-feature {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+  .portal-feature__media {
+    order: -1;
+  }
+  .portal-feature__media img:first-child {
+    max-height: 100%;
+    width: auto;
+    max-width: 85%;
+  }
+  .portal-feature__copy {
+    gap: 0.6rem;
+    padding: 1rem;
+  }
+  .portal-feature__copy h2 {
+    font-size: clamp(2rem, 6vw, 3rem);
+    max-width: 16ch;
+  }
+  .portal-feature__copy .lede {
+    font-size: 0.9rem;
+  }
+  .portal-feature__button {
+    min-height: 42px;
+  }
+  .side-panel .turn-panel {
+    display: none;
+  }
+  .playfield {
+    width: min(100%, calc(100svh - 325px));
+    max-width: min(100%, calc(100svh - 325px));
+    min-width: 240px;
+  }
+  .board-dice-float {
+    height: 54px;
+  }
+  .board-dice-float button {
+    min-width: 110px;
+  }
+  .board-dice-float span {
+    max-width: 145px;
+  }
+  .filter-dialog,
+  .admin-controls,
+  .settings-panel {
+    padding: 1rem;
+  }
+  .admin-page {
+    padding-top: 1rem;
+  }
+  .admin-header {
+    padding-bottom: 1.5rem;
+  }
+}
+
+.theme-toggle,
+:root[data-theme="dark"] .theme-toggle {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  box-shadow: none;
+}
+.theme-toggle:hover:not(:disabled),
+:root[data-theme="dark"] .theme-toggle:hover:not(:disabled) {
+  background: var(--surface-soft);
+  color: var(--ink);
+}
+:root[data-theme="dark"] .portal-feature__media img:first-child {
+  transform: none;
+  filter: none;
+}
+.lobby-main {
+  gap: 0.7rem;
+}
+.lobby-status-strip {
+  margin: 0;
+  padding-block: 0.35rem;
+}
+.lobby-window .player-row {
+  padding: 0.4rem;
+}
+.lobby-window .player-list {
+  gap: 0.25rem;
+}
+.lobby-actions {
+  padding-top: 0.65rem;
+}
+
+.dice-placeholder,
+:root[data-theme="dark"] .dice-placeholder,
+.dice-actions span,
+:root[data-theme="dark"] .dice-actions span {
+  color: var(--muted);
+}
+.settings-dock__button,
+:root[data-theme="dark"] .settings-dock__button,
+.admin-dock__button,
+:root[data-theme="dark"] .admin-dock__button {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  box-shadow: none;
+}
+.settings-dock__button:hover:not(:disabled),
+:root[data-theme="dark"] .settings-dock__button:hover:not(:disabled),
+.admin-dock__button:hover:not(:disabled),
+:root[data-theme="dark"] .admin-dock__button:hover:not(:disabled) {
+  background: var(--surface-soft);
+  color: var(--ink);
+}
+.board-dice-float,
+:root[data-theme="dark"] .board-dice-float {
+  background: transparent;
+  color: var(--ink);
+}
+
+.chat-form input, :root[data-theme="dark"] .chat-form input { background: var(--surface); color: var(--ink); border-color: var(--line); }
+.chat-form button, :root[data-theme="dark"] .chat-form button { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.chat-form button:hover:not(:disabled), :root[data-theme="dark"] .chat-form button:hover:not(:disabled) { background: var(--hover); color: var(--on-accent); }
+@media (min-width: 900px) and (max-height: 850px) {
+  .lobby-stage { padding-block: .75rem; }
+  .lobby-window { padding: 1.25rem; }
+  .lobby-main, .lobby-window--solo .lobby-main { gap: .4rem; }
+  .lobby-window .player-list { gap: 0; }
+  .lobby-window .player-row { min-height: 38px; padding-block: .2rem; }
+  .lobby-window .player-row button { min-height: 30px; padding: .3rem .5rem; }
+  .lobby-actions { gap: .4rem; padding-top: .5rem; }
+  .lobby-actions button { min-height: 38px; padding: .5rem .65rem; font-size: .85rem; }
+  .lobby-status-strip { padding-block: .15rem; }
 }
