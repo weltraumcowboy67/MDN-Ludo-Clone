@@ -7,10 +7,10 @@ colors:
   muted: "#56645d"
   primary: "#315e49"
   line: "#c7cec4"
-  darkCanvas: "#17221f"
-  darkSurface: "#22312b"
-  darkInk: "#f1f1e7"
-  darkAccent: "#bdd7ad"
+  darkCanvas: "#15161a"
+  darkSurface: "#202126"
+  darkInk: "#f2f3f5"
+  darkAccent: "#b8c8ff"
 typography:
   body:
     fontFamily: "Nunito Variable, sans-serif"
@@ -35,7 +35,7 @@ components:
 # MDN Ludo: am gemeinsamen Spieltisch
 
 ## Overview
-Ein ruhiger Spieltisch für Freunde. Das Brett trägt die vier kräftigen Spielerfarben; die Oberfläche nimmt sich mit Papier- und Filztönen zurück. Verwaltung gehört hinter /login und hat dieselbe visuelle Sprache. Vorhandene lokale Figuren-Assets bleiben erhalten.
+Ein ruhiger Spieltisch für Freunde. Das Brett trägt die vier kräftigen Spielerfarben; die Oberfläche nimmt sich mit Papierflächen und neutralem Anthrazit zurück. Verwaltung gehört hinter /login und hat dieselbe visuelle Sprache. Vorhandene lokale Figuren-Assets bleiben erhalten.
 
 ## Colors
 `client/src/design.css` ist die maßgebliche Token- und Oberflächenschicht nach dem älteren `styles.css`. Die Frontmatter-Farben entsprechen dort `--canvas`, `--surface`, `--ink`, `--muted`, `--accent`, `--line`; Dark-Werte stehen im `data-theme="dark"`-Block. Spielerfarben bleiben fachliche Werte in `shared/src/constants.ts`. Keine zusätzlichen Farbsysteme pro Bildschirm.
@@ -44,7 +44,7 @@ Ein ruhiger Spieltisch für Freunde. Das Brett trägt die vier kräftigen Spiele
 Lokal gebündelte Nunito für lesbaren Spieltext, Baloo 2 für Überschriften und Aktionen. Raumcodes benutzen Monospace. Keine Font-CDNs. Überschriften bleiben kurz, deutsche Beschriftungen nennen konkrete Aktionen.
 
 ## Layout
-Desktop: Spieler links, Brett zentral, Zug und Chat rechts. Bei mittlerer Breite wandern Spieler über das Brett. Mobil: kompakte Spielerzeilen, Brett, Würfel darunter, einklappbarer Chat. Lobby: offene Hauptspalte mit einer durch eine Linie getrennten Chatspalte. Verwaltung: lesbare Zeilen, keine Kachelwand. Kleine Displays dürfen für Lobby und Verwaltung vertikal scrollen.
+Desktop: Spieler links, Brett zentral, Zug und Chat rechts. Bei mittlerer Breite wandern Spieler über das Brett. Mobil: kompakte Spielerzeilen, Brett, Würfel darunter, einklappbarer Multiplayer-Chat. Solo hat keinen Chat. Die Zuganzeige behält ihre Höhe. Lobby: offene Hauptspalte mit einer durch eine Linie getrennten Chatspalte. Verwaltung: lesbare Zeilen; die vollständige Filterliste mit Suche und Bearbeitung öffnet als Dialog. Kleine Displays dürfen für Lobby und Verwaltung vertikal scrollen.
 
 ## Elevation & Depth
 Nur Brett, Haupteinstieg und Dialoge erhalten einen leichten Schatten. Keine verschachtelten dekorativen Karten. Dialoge nutzen einen abgedunkelten Hintergrund. Farbflächen und Typografie vermitteln die Hierarchie.

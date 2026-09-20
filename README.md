@@ -34,7 +34,7 @@ Dieser eine Befehl:
 3. Startet den Spielserver und wartet auf dessen Healthcheck.
 4. Erstellt einen temporären öffentlichen HTTPS-Link wie `https://….trycloudflare.com`. Frontend und WebSocket-Verbindung laufen beide über diesen Link.
 
-Öffne den ausgegebenen Link, erstelle eine **Multiplayer**-Partie und klicke **Einladen** und teile den kopierten Link. Der Link füllt den Raumcode automatisch aus. Alle klicken auf „Bereit“, dann startet der Host. Raumcodes unterscheiden Groß- und Kleinschreibung. Strg+C beendet Server und Tunnel gemeinsam. Mitspieler brauchen nur ihren Browser.
+Öffne den ausgegebenen Link, erstelle eine **Multiplayer**-Partie und klicke **Einladen** und teile den kopierten Link. Der Link öffnet die Partie direkt. Alle klicken auf „Bereit“, dann startet der Host. Raumcodes unterscheiden Groß- und Kleinschreibung. Strg+C beendet Server und Tunnel gemeinsam. Mitspieler brauchen nur ihren Browser.
 
 Auf macOS bzw. anderen Architekturen zuerst [cloudflared installieren](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/), danach funktioniert derselbe Share-Befehl.
 
@@ -63,7 +63,7 @@ Der Einrichtungsdialog fragt Benutzername und Passwort ab und speichert nur eine
 
 Öffne **http://127.0.0.1:2567/login** direkt auf dem Server-PC. Anmeldung über öffentliche Tunnel, fremde Hosts oder weitergeleitete Anfragen ist gesperrt, auch wenn cloudflared selbst über localhost verbindet. Der normale Spielzugang bleibt öffentlich erreichbar. Eine Sitzung läuft nach acht Stunden ab und endet beim Serverneustart.
 
-Die Verwaltung kann Meldungen annehmen oder ablehnen, zusätzliche Filterbegriffe entfernen, Spieler entfernen sowie Partien pausieren, fortsetzen oder in die Lobby zurücksetzen. Erst eine Freigabe nimmt einen gemeldeten Begriff in den globalen Filter auf. Bei aktivem Filter werden bereits vorhandene Chattexte ebenfalls gefiltert; Entfernen eines Begriffs stellt zuvor zensierten Text nicht wieder her. Nach Anmeldung einem Spiel beitreten oder die bestehende Spielseite neu laden: Dann erscheint dort das Adminmenü. Abmelden entzieht auch bestehenden Spielverbindungen die Rechte.
+Die Verwaltung kann Meldungen annehmen oder ablehnen, die vollständige Filterliste durchsuchen und Begriffe hinzufügen, bearbeiten oder entfernen (eingebaute Regeln deaktivieren), Spieler entfernen sowie Partien pausieren, fortsetzen oder in die Lobby zurücksetzen. Erst eine Freigabe nimmt einen gemeldeten Begriff in den globalen Filter auf. Bei aktivem Filter werden bereits vorhandene Chattexte ebenfalls gefiltert; Entfernen eines Begriffs stellt zuvor zensierten Text nicht wieder her. Nach Anmeldung einem Spiel beitreten oder die bestehende Spielseite neu laden: Dann erscheint dort das Adminmenü. „Partie öffnen“ in der Verwaltung verbindet dich auch bei vollen oder laufenden Partien als Beobachter mit Spielsteuerung. Abmelden entzieht auch bestehenden Spielverbindungen die Rechte.
 
 Für Freunde den Einladungslink **von der öffentlichen Tunnel-Adresse** kopieren. Ein über localhost kopierter Link ist nur auf deinem PC nutzbar. Wenn sich der Quick-Tunnel-Link ändert, ist auch der Browser-Ursprung neu: gespeicherte Zugänge der alten Tunnel-Adresse werden nicht automatisch übertragen. Eine feste Domain wird hier absichtlich nicht eingerichtet.
 
@@ -72,7 +72,7 @@ Für Freunde den Einladungslink **von der öffentlichen Tunnel-Adresse** kopiere
 - **Port belegt:** anderen Server mit Strg+C beenden oder `PORT` in `.env` ändern. `share` bricht bewusst ab, bevor ein bereits laufender fremder Dienst öffentlich geteilt wird.
 - **Nur JSON statt Spiel:** `npm run build` ausführen und den Server neu starten, oder `npm run play` nutzen.
 - **Server nicht erreichbar:** Terminal prüfen, `/health` öffnen, abgelaufenen Tunnel durch den neu ausgegebenen Link ersetzen. Bei `dev` müssen beide Prozesse laufen.
-- **Raum nicht gefunden:** Codes exakt kopieren. Leere, noch nicht gestartete Lobbys verschwinden nach 60 Sekunden. Begonnene Partien werden gespeichert und nach Neustart pausiert wiederhergestellt. Für deinen alten Platz brauchst du denselben Browser und Ursprung.
+- **Raum nicht gefunden:** Codes exakt kopieren. Alle Partien ohne verbundene Menschen verschwinden nach 60 Sekunden, einschließlich Speicherstand. Begonnene Partien werden gespeichert und nach Neustart pausiert wiederhergestellt. Für deinen alten Platz brauchst du denselben Browser und Ursprung.
 - **Tunnel startet nicht:** Internet/DNS und Firewall prüfen. Die heruntergeladene Datei liegt nur in `.tools/`. Eine explizite leere Tunnel-Konfiguration verhindert Konflikte mit vorhandenen benannten Cloudflare-Tunneln.
 - **Kein Ton:** Audio-Dateien sind absichtlich nicht enthalten. Fehlende Quellen werden nicht abgespielt. Optional eigene, passend lizenzierte Dateien in `client/src/assets.ts` einbinden.
 
@@ -102,8 +102,8 @@ npm audit
 ## Grenzen und Daten
 
 - Begonnene und beendete Partien einschließlich Chat und privater Wiederbeitritts-Schlüssel werden nach jeder Änderung atomar unter `.data/games/` gespeichert. Offene Lobbys sind flüchtig. Reports und freigegebene Begriffe liegen ebenfalls in `.data/`. Keine dieser Dateien ins Git aufnehmen.
-- Nach Neustart oder dem Weggang des letzten Menschen bleibt die Partie pausiert, bis Host oder lokaler Admin fortsetzt. Nach einem Reset wird die gespeicherte Partie entfernt. Alte Partien laufen nicht automatisch ab; zum Aufräumen bei gestopptem Server gezielt die entsprechende JSON-Datei in `.data/games/` löschen.
-- Browser speichern Einstellungen und Wiederbeitritts-Schlüssel lokal. Der Wiederbeitritt funktioniert über „Letzten Raum wieder betreten“ mit demselben Browser und derselben Adresse. Hostrechte gehen beim Verlassen an einen verbundenen Mitspieler.
+- Nach Neustart oder dem Weggang des letzten Menschen bleibt die Partie pausiert, bis Host oder lokaler Admin fortsetzt. Nach einem Reset wird die gespeicherte Partie entfernt. Ohne verbundene Menschen wird jede Partie nach 60 Sekunden automatisch gelöscht. Nach einem Serverneustart beginnt diese Frist neu. Admins können Partien auch sofort löschen.
+- Browser speichern Einstellungen und Wiederbeitritts-Schlüssel lokal. Beim Neuladen kehrst du automatisch in die aktuelle Partie zurück. Alternativ gibt es „Letzten Raum wieder betreten“, jeweils mit demselben Browser und derselben Adresse innerhalb der 60-Sekunden-Frist. Hostrechte gehen beim Verlassen an einen verbundenen Mitspieler.
 - Classic/Singleplayer sind in der Oberfläche freigeschaltet. Der Party-Modus hat bereits Server- und Brettcode für acht Farben, bleibt in der Modusauswahl aber wie bisher deaktiviert.
 - Frühere Appwrite-Räume werden nicht migriert. Der unbenutzte Appwrite-Transport samt fest eingetragener Cloud-Projektkennung wurde zugunsten des vorhandenen lokalen Servers entfernt.
 - Adminrechte entstehen ausschließlich durch eine lokale Anmeldung, nicht durch einen Chatcode oder eine Debug-Umgebungsvariable. Kein öffentlicher Accountservice und kein dauerhaftes Hosting.
@@ -114,3 +114,7 @@ npm audit
 Unabhängiges, inoffizielles Spielprojekt. Siehe `Notice.md` und die MIT-Lizenz in `licence`.
 
 Vor Änderungen README, `package.json`, gemeinsame Regeln und betroffene Module lesen. Bestehende Assets und Spielregeln erhalten. Neue Regeln zuerst gemeinsam definieren und serverseitig validieren. Keine Secrets, `.env`, `.data/`, `.tools/`, Audiodateien, Build-Ergebnisse oder `node_modules` committen. Nach Änderungen müssen Typprüfung, Build und relevante Tests bestehen; bei UI-Änderungen Desktop/Mobil sowie beide Farbmodi prüfen.
+
+### Bedienung
+
+Solo: Farbe und Zugzeit wählen, dann direkt „Spiel starten“. Kein Bereit-Schritt und kein Chat. Alle acht Farben sind auswählbar; Computer geben belegte Farben durch einen Tausch frei. Multiplayer behält Bereit-Status und Chat. Einstellungen öffnen als Dialog. Jede Würfelzahl hat im normalen Spiel bei jedem Wurf 1/6 Chance; Admin-Eingriffe sind davon ausgenommen.

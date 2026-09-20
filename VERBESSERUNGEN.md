@@ -7,7 +7,7 @@ Stand: 19. September 2026.
 - **Lokaler Multiplayer war nicht lokal:** Der Client schrieb direkt in ein fest eingetragenes Appwrite-Projekt, während README und Startbefehle einen Colyseus-Server starteten. Client und Server sprechen jetzt über denselben HTTP/WebSocket-Ursprung. Der doppelte Appwrite-Spielcode und die Cloud-Abhängigkeit sind entfernt. Bestehende Cloud-Partien werden nicht übernommen.
 - **Jeder konnte Admin werden:** Die Chat-Nachricht `ADMIN!` schaltete Würfelmanipulation, Kicks und IP-Sperren frei. Jetzt ausschließlich über eine gültige lokale Admin-Sitzung verfügbar. Chatcodes und Debug-Flags vergeben keine Rechte.
 - **Host-Ausstieg blockierte die Lobby:** Rechte werden an einen verbundenen Menschen übergeben. Dieser kann offline gebliebene Plätze entfernen und das Spiel starten.
-- **Neuladen konnte das letzte Spiel löschen:** Leere Lobbys bleiben 60 Sekunden erhalten; begonnene Partien werden dauerhaft gespeichert und pausiert. Wiederbeitritts-Schlüssel sind jetzt kryptografisch zufällige UUIDs.
+- **Neuladen konnte das letzte Spiel löschen:** Leere Lobbys bleiben 60 Sekunden erhalten; begonnene Partien werden gespeichert und pausiert, ebenfalls nach 60 Sekunden ohne Menschen gelöscht. Wiederbeitritts-Schlüssel sind jetzt kryptografisch zufällige UUIDs.
 - **Revanche konnte laufende Partien zurücksetzen:** Der Server nimmt diese Aktion nur nach Spielende an.
 - **Fehlende Nachrichtenfelder konnten Handler abstürzen lassen:** Leere und `null`-Nachrichten werden ohne entsprechende Ausnahme verarbeitet.
 - **Setup war unvollständig:** `npm run setup`, `npm run play` und `npm run share` sind dokumentiert. Tunnel-Download mit Prüfsumme, Portkontrolle, Healthcheck und gemeinsamem Prozessende sind enthalten. Vite übernimmt den konfigurierten Server-Port und wechselt bei belegtem Client-Port nicht unbemerkt die Adresse.
@@ -18,7 +18,7 @@ Stand: 19. September 2026.
 
 ## Prüfung
 
-- Installation aus dem Lockfile, TypeScript-Prüfung, Produktionsbuild und 16 Tests mit echtem Colyseus-Server/WebSocket-Clients.
+- Installation aus dem Lockfile, TypeScript-Prüfung, Produktionsbuild und 20 Tests mit echtem Colyseus-Server/WebSocket-Clients.
 - Getestete Abläufe: zwei Spieler, Chat, Bereit-Status, Hostwechsel, Entfernen eines Offline-Platzes, Wiederbeitritt des letzten Spielers, Revanche-Sperre und Reset nach Spielende, Bot-Automation, acht unterschiedliche Party-Farben, fremder Würfelzug, fehlende Nachrichtenfelder, Admin-Zugriffssperren, HTTP-Anmeldung, CSRF-Sperre, Rechteentzug nach Logout, Report-Freigabe und tatsächlicher Serverneustart mit erhaltenen Figuren/Würfel/Zugangsschlüsseln.
 - Echter Cloudflare Quick Tunnel: Healthcheck über HTTPS sowie Raumbeitritt und Chat mit zwei WSS-Verbindungen erfolgreich. Vites Entwicklungsproxy ebenfalls über HTTP und WebSocket geprüft.
 - Firefox: Raum erstellen, Singleplayer mit Bots, Spielstart und Wiederbeitritt nach Neuladen. Desktop 1920×1080 und 1366×768 ohne Seitenscrollen; 390×844 und 360×640 ohne horizontales Scrollen. Beide Farbmodi betrachtet, Hover-Zustände und Tastaturbedienung geprüft.
@@ -45,3 +45,12 @@ Zusätzlich beim Browsercheck behoben: Zufallsnamen konnten am eigenen Filter sc
 - Alte Spielstände bei Bedarf über eine ausdrückliche Löschaktion verwalten. Derzeit gezielte Dateilöschung bei gestopptem Server.
 
 **Ausdrücklich zurückgestellt:** Assets verkleinern und dauerhafter öffentlicher Betrieb. GitHub-Profil-Auszeichnungen werden nicht künstlich erzeugt.
+
+## Live-Feedback umgesetzt
+
+- Automatischer Wiederbeitritt beim Neuladen; verlassene Partien nach 60 Sekunden löschen.
+- Solo ohne Chat und Bereit-Schritt; Pink und alle anderen Farben auch im klassischen Brett.
+- Neutrales Anthrazit, gerade Brettvorschau, kompaktere Lobby und stabile Zuganzeige.
+- Einfacher Würfel, klare 1/6-Erklärung, kein irreführender Chat-Zähler.
+- Einstellungen und vollständige Filterverwaltung als Dialoge; lokale Admin-Beobachter können laufende volle Partien öffnen.
+- Neue Regressionstests prüfen Solo-Start/Farbe, Löschfrist/Wiederbeitritt, Admin-Beobachter und Filter-Bearbeitung.
