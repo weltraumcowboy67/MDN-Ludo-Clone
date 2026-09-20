@@ -1271,3 +1271,8 @@ textarea {
   .lobby-actions button { min-height: 38px; padding: .5rem .65rem; font-size: .85rem; }
   .lobby-status-strip { padding-block: .15rem; }
 }
+/* Reserve room for mobile utilities, including the pause action after rejoining. */
+@media (max-width: 760px) {
+  .playfield { width: min(100%, calc(100svh - 350px)); max-width: min(100%, calc(100svh - 350px)); }
+  .app-shell:has(.pause-banner) .playfield { width: min(100%, calc(100svh - 430px)); max-width: min(100%, calc(100svh - 430px)); }
+}
